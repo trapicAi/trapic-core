@@ -6,3 +6,5 @@ dist/
 *.db
 data/
 *.log
+.claude/
+CLAUDE.md

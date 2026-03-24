@@ -1,14 +1,14 @@
 /**
  * Standalone HTTP server for Trapic MCP (Node.js + SQLite)
  *
- * This is the open-source entrypoint. No Cloudflare Workers, no Supabase.
- * Uses SQLite for storage, simple Bearer token for auth.
+ * Open-source standalone server. SQLite storage, zero vendor dependencies.
+ * Uses SQLite for storage. Localhost-only by default (no auth needed).
  *
  * Usage:
- *   TRAPIC_PORT=3000 TRAPIC_DB=./data/trapic.db TRAPIC_TOKEN=my-secret npx tsx src/server.ts
+ *   npx tsx src/server.ts
  *
  * Docker:
- *   docker run -p 3000:3000 -v ./data:/data trapic-core
+ *   docker compose up
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -98,9 +98,19 @@ const httpServer = createHttpServer(async (req, res) => {
     // Resolve user (localhost-only, no auth needed)
     const userId = resolveUser(req.headers.authorization || null);
 
-    // Read body
+    // Read body (1MB limit)
+    const MAX_BODY = 1024 * 1024;
     const chunks: Buffer[] = [];
-    for await (const chunk of req) chunks.push(chunk as Buffer);
+    let totalSize = 0;
+    for await (const chunk of req) {
+      totalSize += (chunk as Buffer).length;
+      if (totalSize > MAX_BODY) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Payload too large" }));
+        return;
+      }
+      chunks.push(chunk as Buffer);
+    }
     const body = Buffer.concat(chunks);
 
     // Create MCP server + transport for this request

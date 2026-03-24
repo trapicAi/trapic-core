@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { DbAdapter } from "../core/db-adapter.js";
 import { hooks } from "../core/hooks.js";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -19,15 +19,13 @@ interface GitCommit {
 
 /** Parse git log into structured commits */
 function parseGitLog(repoPath: string, maxCommits: number, since?: string): GitCommit[] {
-  const sinceArg = since ? `--since="${since}"` : "";
   const format = "%H%n%aI%n%s%n%b%n---END---";
+  const args = ["-C", repoPath, "log", `--format=${format}`, "--shortstat", "-n", String(maxCommits)];
+  if (since) args.push(`--since=${since}`);
 
   let logOutput: string;
   try {
-    logOutput = execSync(
-      `git -C "${repoPath}" log --format="${format}" --shortstat -n ${maxCommits} ${sinceArg}`,
-      { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024 }
-    );
+    logOutput = execFileSync("git", args, { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024 });
   } catch {
     return [];
   }
@@ -146,11 +144,11 @@ export function registerImportGit(server: McpServer, userId: string | null, db: 
     "conventions, and facts. Use to bootstrap a project's knowledge base. " +
     "從 git 歷史匯入知識。分析 commits 並建立 traces。",
     {
-      url: z.string().describe("Git repository URL to clone and analyze. Git repo URL"),
-      project: z.string().describe("Project name for tags, e.g. 'my-app'. 專案名稱"),
-      branch: z.string().default("main").describe("Branch to analyze (default: main). 分析的分支"),
-      max_commits: z.number().int().min(1).max(500).default(100).describe("Max commits to analyze (default: 100). 最多分析幾個 commits"),
-      since: z.string().optional().describe("Only commits after this date, e.g. '2026-01-01'. 只分析此日期之後的 commits"),
+      url: z.string().url().refine(u => u.startsWith("https://") || u.startsWith("http://"), "Only HTTP(S) URLs allowed").describe("Git repo URL (HTTPS only)"),
+      project: z.string().max(100).regex(/^[a-zA-Z0-9._-]+$/).describe("Project name for tags, e.g. 'my-app'"),
+      branch: z.string().max(100).regex(/^[a-zA-Z0-9._\-/]+$/).default("main").describe("Branch to analyze (default: main)"),
+      max_commits: z.number().int().min(1).max(500).default(100).describe("Max commits to analyze (default: 100)"),
+      since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Only commits after this date (YYYY-MM-DD)"),
       dry_run: z.boolean().default(true).describe("Preview only, don't create traces (default: true). 僅預覽，不建立 traces"),
     },
     async (params) => {
@@ -168,15 +166,18 @@ export function registerImportGit(server: McpServer, userId: string | null, db: 
         lines.push(`Cloning ${params.url}...`);
 
         try {
-          execSync(`git clone --depth=${params.max_commits + 10} --branch ${params.branch} --single-branch "${params.url}" "${tmpDir}"`, {
-            encoding: "utf-8",
-            timeout: 60000,
-            stdio: "pipe",
-          });
+          execFileSync("git", [
+            "clone", `--depth=${params.max_commits + 10}`,
+            "--branch", params.branch,
+            "--single-branch", params.url, tmpDir,
+          ], { encoding: "utf-8", timeout: 60000, stdio: "pipe" });
         } catch (e) {
           rmSync(tmpDir, { recursive: true, force: true });
           return { content: [{ type: "text" as const, text: `Error cloning repo: ${e instanceof Error ? e.message : String(e)}` }] };
         }
+
+        // Ensure temp dir cleanup on any error below
+        try {
 
         // Parse commits
         const allCommits = parseGitLog(tmpDir, params.max_commits, params.since);
@@ -238,9 +239,6 @@ export function registerImportGit(server: McpServer, userId: string | null, db: 
           }
         }
 
-        // Cleanup
-        rmSync(tmpDir, { recursive: true, force: true });
-
         lines.push("");
         lines.push("-------------------------------------------------------");
         if (params.dry_run) {
@@ -260,6 +258,10 @@ export function registerImportGit(server: McpServer, userId: string | null, db: 
         });
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+        } finally {
+          // Always clean up temp dir
+          rmSync(tmpDir, { recursive: true, force: true });
+        }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: [{ type: "text" as const, text: `Error: ${message}` }] };

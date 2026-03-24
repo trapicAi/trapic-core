@@ -1,7 +1,7 @@
 /**
  * Optional hooks for audit logging and quota checking.
  * Default: no-op (open source / self-hosted mode).
- * Override for SaaS features (Supabase audit log, monthly limits).
+ * Override for production features (audit logging, monthly limits).
  */
 
 export type AuditFn = (
@@ -29,8 +29,7 @@ export const noopQuota: QuotaFn = async () => ({
 });
 
 /**
- * Hooks container — set per request via injectEnv() in production.
- * In Cloudflare Workers, module state persists across requests in the same isolate.
+ * Hooks container — override these for production features (audit logging, quotas).
  * Default: no-op (open source mode — no audit, no quota).
  */
 export const hooks = {

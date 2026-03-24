@@ -6,6 +6,5 @@ services:
     volumes:
       - ./data:/data
     environment:
-      - TRAPIC_TOKEN=${TRAPIC_TOKEN:-}
       - TRAPIC_USER=${TRAPIC_USER:-local-user}
       - TRAPIC_DB=/data/trapic.db

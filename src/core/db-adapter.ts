@@ -4,8 +4,8 @@
  * Abstracts all database operations so the core MCP tools work with
  * any database (Postgres, SQLite, MySQL, etc).
  *
- * Each method maps to a Supabase RPC in the current implementation.
- * New adapters implement this interface for their target database.
+ * The SQLite adapter (sqlite-db.ts) provides the reference implementation.
+ * Implement this interface to use your own database.
  */
 
 // ── Types ────────────────────────────────────────────────────
