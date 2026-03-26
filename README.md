@@ -273,6 +273,8 @@ All endpoints require `Authorization: Bearer <TRAPIC_ADMIN_PASSWORD>`.
 
 ### Docker
 
+Public image: `ghcr.io/nickjazz/trapic-core:latest`
+
 ```bash
 # SQLite (default)
 docker compose up

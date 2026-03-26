@@ -21,7 +21,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: trapic-core
-          image: trapic-core:latest
+          image: ghcr.io/nickjazz/trapic-core:latest
           ports:
             - containerPort: 3000
           env:
