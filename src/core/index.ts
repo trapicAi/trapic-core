@@ -18,4 +18,5 @@ export type {
   DecayResult,
   HealthData,
   ContextCandidate,
+  User,
 } from "./db-adapter.js";

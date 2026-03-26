@@ -17,9 +17,10 @@ import {
   DecayResult,
   HealthData,
   ContextCandidate,
+  User,
 } from "../db-adapter.js";
 import { splitTags } from "../tag-utils.js";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 
 const HALF_LIVES: Record<string, number> = {
   state: 30,
@@ -71,6 +72,14 @@ export class SqliteDbAdapter implements DbAdapter {
       CREATE INDEX IF NOT EXISTS idx_traces_status ON traces(status);
       CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at);
       CREATE INDEX IF NOT EXISTS idx_traces_type ON traces(type);
+
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        api_key TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS traces_fts USING fts5(
         content, context, content=traces, content_rowid=rowid
@@ -401,7 +410,58 @@ export class SqliteDbAdapter implements DbAdapter {
   // ── Context (simplified for SQLite) ──
 
   async findCandidateContexts(_scope: string[], _authorIds: string[]): Promise<ContextCandidate[]> {
-    // SQLite version: group by first topic tag as context proxy
     return [];
+  }
+
+  // ── Users ──
+
+  private static generateApiKey(): string {
+    return "sk-" + randomBytes(32).toString("hex");
+  }
+
+  private toUser(row: Record<string, unknown>): User {
+    return {
+      id: row.id as string,
+      name: row.name as string,
+      api_key: row.api_key as string,
+      role: row.role as string,
+      created_at: row.created_at as string,
+    };
+  }
+
+  async listUsers(): Promise<User[]> {
+    const rows = this.db.prepare("SELECT * FROM users ORDER BY created_at DESC").all() as Record<string, unknown>[];
+    return rows.map(r => this.toUser(r));
+  }
+
+  async getUserByApiKey(apiKey: string): Promise<User | null> {
+    const row = this.db.prepare("SELECT * FROM users WHERE api_key = ?").get(apiKey) as Record<string, unknown> | undefined;
+    return row ? this.toUser(row) : null;
+  }
+
+  async insertUser(name: string, role: string): Promise<User> {
+    const id = randomUUID();
+    const apiKey = SqliteDbAdapter.generateApiKey();
+    this.db.prepare("INSERT INTO users (id, name, api_key, role) VALUES (?, ?, ?, ?)").run(id, name, apiKey, role);
+    const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Record<string, unknown>;
+    return this.toUser(row);
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    const result = this.db.prepare("DELETE FROM users WHERE id = ?").run(id);
+    return result.changes > 0;
+  }
+
+  async regenerateApiKey(id: string): Promise<User | null> {
+    const apiKey = SqliteDbAdapter.generateApiKey();
+    const result = this.db.prepare("UPDATE users SET api_key = ? WHERE id = ?").run(apiKey, id);
+    if (result.changes === 0) return null;
+    const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Record<string, unknown>;
+    return this.toUser(row);
+  }
+
+  async userCount(): Promise<number> {
+    const row = this.db.prepare("SELECT COUNT(*) as cnt FROM users").get() as { cnt: number };
+    return row.cnt;
   }
 }

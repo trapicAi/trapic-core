@@ -1,8 +1,7 @@
 /**
- * Standalone HTTP server for Trapic MCP (Node.js + SQLite)
+ * Standalone HTTP server for Trapic MCP
  *
- * Open-source standalone server. SQLite storage, zero vendor dependencies.
- * Uses SQLite for storage. Localhost-only by default (no auth needed).
+ * Open-source standalone server. SQLite or MariaDB storage.
  *
  * Usage:
  *   npx tsx src/server.ts
@@ -24,7 +23,8 @@ import { registerRecall } from "./tools/recall.js";
 import { registerHealth } from "./tools/health.js";
 import { registerDecay } from "./tools/decay.js";
 import { registerImportGit } from "./tools/import-git.js";
-import { createServer as createHttpServer } from "http";
+import { adminHtml } from "./admin-ui.js";
+import { createServer as createHttpServer, IncomingMessage } from "http";
 
 // ── Config ───────────────────────────────────────────────────
 const PORT = parseInt(process.env.TRAPIC_PORT || "3000", 10);
@@ -32,7 +32,7 @@ const HOST = process.env.TRAPIC_HOST || "127.0.0.1";
 const DB_ADAPTER = process.env.TRAPIC_DB_ADAPTER || "sqlite"; // "sqlite" | "mariadb"
 const DB_PATH = process.env.TRAPIC_DB || "./data/trapic.db";
 const DEFAULT_USER = process.env.TRAPIC_USER || "local-user";
-const API_KEYS = (process.env.TRAPIC_API_KEYS || "").split(",").map(k => k.trim()).filter(Boolean);
+const ADMIN_PASSWORD = process.env.TRAPIC_ADMIN_PASSWORD || "";
 
 // MariaDB config (used when TRAPIC_DB_ADAPTER=mariadb)
 const MARIADB_HOST = process.env.TRAPIC_MARIADB_HOST || "localhost";
@@ -84,9 +84,35 @@ function createMcpServer(userId: string): McpServer {
   return server;
 }
 
+// ── Helpers ──────────────────────────────────────────────────
+
+function extractBearer(authHeader: string | null): string | null {
+  if (!authHeader) return null;
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1] : null;
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+async function readBody(req: IncomingMessage, maxSize: number = 1024 * 1024): Promise<Buffer | null> {
+  const chunks: Buffer[] = [];
+  let totalSize = 0;
+  for await (const chunk of req) {
+    totalSize += (chunk as Buffer).length;
+    if (totalSize > maxSize) return null;
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 // ── Auth ─────────────────────────────────────────────────────
-// When TRAPIC_API_KEYS is set, Bearer token is required.
-// When unset, localhost-only mode — no auth needed.
 
 type AuthResult = {
   ok: true;
@@ -97,38 +123,38 @@ type AuthResult = {
   error: string;
 };
 
-function authenticate(authHeader: string | null): AuthResult {
-  // No API keys configured → open mode (localhost use)
-  if (API_KEYS.length === 0) {
+async function authenticate(authHeader: string | null): Promise<AuthResult> {
+  const userCount = await db.userCount();
+
+  // Open mode: no users in DB and no admin password → anyone can access
+  if (userCount === 0 && !ADMIN_PASSWORD) {
     return { ok: true, userId: DEFAULT_USER };
   }
 
-  if (!authHeader) {
+  const token = extractBearer(authHeader);
+
+  if (!token) {
     return { ok: false, status: 401, error: "Missing Authorization header. Use: Bearer <api-key>" };
   }
 
-  const match = authHeader.match(/^Bearer\s+(.+)$/i);
-  if (!match) {
-    return { ok: false, status: 401, error: "Invalid Authorization format. Use: Bearer <api-key>" };
-  }
-
-  const token = match[1];
-
-  // Constant-time comparison to prevent timing attacks
-  const valid = API_KEYS.some(key => {
-    if (key.length !== token.length) return false;
-    let result = 0;
-    for (let i = 0; i < key.length; i++) {
-      result |= key.charCodeAt(i) ^ token.charCodeAt(i);
+  // Look up token in users table
+  if (userCount > 0) {
+    const user = await db.getUserByApiKey(token);
+    if (user) {
+      return { ok: true, userId: user.name };
     }
-    return result === 0;
-  });
-
-  if (!valid) {
-    return { ok: false, status: 403, error: "Invalid API key" };
   }
 
-  return { ok: true, userId: DEFAULT_USER };
+  return { ok: false, status: 403, error: "Invalid API key" };
+}
+
+// ── Admin Auth ───────────────────────────────────────────────
+
+function authenticateAdmin(authHeader: string | null): boolean {
+  if (!ADMIN_PASSWORD) return false;
+  const token = extractBearer(authHeader);
+  if (!token) return false;
+  return constantTimeEqual(token, ADMIN_PASSWORD);
 }
 
 // ── HTTP Server ──────────────────────────────────────────────
@@ -145,46 +171,102 @@ const httpServer = createHttpServer(async (req, res) => {
     return;
   }
 
+  const json = (status: number, data: unknown) => {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(data));
+  };
+
   // Health check
   if (url.pathname === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", server: "trapic-mcp", mode: DB_ADAPTER }));
+    json(200, { status: "ok", server: "trapic-mcp", mode: DB_ADAPTER });
     return;
   }
 
-  // MCP endpoint
+  // ── Admin UI ──────────────────────────────────────────────
+  if (url.pathname === "/admin" && req.method === "GET") {
+    if (!ADMIN_PASSWORD) {
+      json(403, { error: "Admin UI disabled. Set TRAPIC_ADMIN_PASSWORD to enable." });
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(adminHtml());
+    return;
+  }
+
+  // ── Admin API ─────────────────────────────────────────────
+  if (url.pathname.startsWith("/admin/api/")) {
+    if (!ADMIN_PASSWORD) {
+      json(403, { error: "Admin API disabled. Set TRAPIC_ADMIN_PASSWORD to enable." });
+      return;
+    }
+    if (!authenticateAdmin(req.headers.authorization || null)) {
+      json(401, { error: "Invalid admin password" });
+      return;
+    }
+
+    // GET /admin/api/users
+    if (url.pathname === "/admin/api/users" && req.method === "GET") {
+      const users = await db.listUsers();
+      json(200, { users });
+      return;
+    }
+
+    // POST /admin/api/users
+    if (url.pathname === "/admin/api/users" && req.method === "POST") {
+      const body = await readBody(req);
+      if (!body) { json(413, { error: "Payload too large" }); return; }
+      let parsed: { name?: string; role?: string };
+      try { parsed = JSON.parse(body.toString()); } catch { json(400, { error: "Invalid JSON" }); return; }
+      const name = parsed.name?.trim();
+      const role = parsed.role === "admin" ? "admin" : "user";
+      if (!name) { json(400, { error: "name is required" }); return; }
+      const user = await db.insertUser(name, role);
+      json(201, { user });
+      return;
+    }
+
+    // DELETE /admin/api/users/:id
+    const deleteMatch = url.pathname.match(/^\/admin\/api\/users\/([^/]+)$/);
+    if (deleteMatch && req.method === "DELETE") {
+      const ok = await db.deleteUser(deleteMatch[1]);
+      if (!ok) { json(404, { error: "User not found" }); return; }
+      json(200, { ok: true });
+      return;
+    }
+
+    // POST /admin/api/users/:id/regenerate
+    const regenMatch = url.pathname.match(/^\/admin\/api\/users\/([^/]+)\/regenerate$/);
+    if (regenMatch && req.method === "POST") {
+      const user = await db.regenerateApiKey(regenMatch[1]);
+      if (!user) { json(404, { error: "User not found" }); return; }
+      json(200, { user });
+      return;
+    }
+
+    json(404, { error: "Not found" });
+    return;
+  }
+
+  // ── MCP endpoint ──────────────────────────────────────────
   if (url.pathname === "/mcp") {
-    // Only POST
     if (req.method !== "POST") {
       res.writeHead(405, { Allow: "POST" }).end();
       return;
     }
 
-    // Authenticate
-    const auth = authenticate(req.headers.authorization || null);
+    const auth = await authenticate(req.headers.authorization || null);
     if (!auth.ok) {
-      res.writeHead(auth.status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: auth.error }));
+      json(auth.status, { error: auth.error });
       return;
     }
     const userId = auth.userId;
 
-    // Read body (1MB limit)
-    const MAX_BODY = 1024 * 1024;
-    const chunks: Buffer[] = [];
-    let totalSize = 0;
-    for await (const chunk of req) {
-      totalSize += (chunk as Buffer).length;
-      if (totalSize > MAX_BODY) {
-        res.writeHead(413, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Payload too large" }));
-        return;
-      }
-      chunks.push(chunk as Buffer);
+    const body = await readBody(req);
+    if (!body) {
+      json(413, { error: "Payload too large" });
+      return;
     }
-    const body = Buffer.concat(chunks);
 
-    // Create MCP server + transport for this request
     const server = createMcpServer(userId);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -193,7 +275,6 @@ const httpServer = createHttpServer(async (req, res) => {
 
     await server.connect(transport);
 
-    // Convert Node.js IncomingMessage to Web Request
     const webRequest = new Request(url.toString(), {
       method: "POST",
       headers: Object.fromEntries(
@@ -201,12 +282,11 @@ const httpServer = createHttpServer(async (req, res) => {
           .filter(([, v]) => v !== undefined)
           .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : v as string])
       ),
-      body,
+      body: new Uint8Array(body),
     });
 
     const response = await transport.handleRequest(webRequest);
 
-    // Write Web Response back to Node.js
     res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
     const respBody = await response.text();
     res.end(respBody);
@@ -214,8 +294,7 @@ const httpServer = createHttpServer(async (req, res) => {
   }
 
   // 404
-  res.writeHead(404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: "Not found" }));
+  json(404, { error: "Not found" });
 });
 
 // ── Start ────────────────────────────────────────────────────
@@ -226,11 +305,19 @@ async function main() {
   httpServer.listen(PORT, HOST, () => {
     console.log(`[trapic] MCP server running at http://${HOST}:${PORT}/mcp`);
     console.log(`[trapic] Health check: http://${HOST}:${PORT}/health`);
-    if (API_KEYS.length > 0) {
-      console.log(`[trapic] Auth: Bearer token required (${API_KEYS.length} API key(s) configured)`);
-    } else {
-      console.log(`[trapic] Auth: open (no TRAPIC_API_KEYS set)`);
+    if (ADMIN_PASSWORD) {
+      console.log(`[trapic] Admin UI: http://${HOST}:${PORT}/admin`);
     }
+    const userCountPromise = db.userCount().then(count => {
+      if (count > 0) {
+        console.log(`[trapic] Auth: API key required (${count} user(s) in database)`);
+      } else if (ADMIN_PASSWORD) {
+        console.log(`[trapic] Auth: open (no users yet — create users at /admin)`);
+      } else {
+        console.log(`[trapic] Auth: open (set TRAPIC_ADMIN_PASSWORD to enable user management)`);
+      }
+    });
+    userCountPromise.catch(() => {});
     if (HOST === "127.0.0.1") {
       console.log(`[trapic] Listening on localhost only. Set TRAPIC_HOST=0.0.0.0 to expose.`);
     }

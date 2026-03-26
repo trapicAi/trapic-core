@@ -20,9 +20,10 @@ import {
   DecayResult,
   HealthData,
   ContextCandidate,
+  User,
 } from "../db-adapter.js";
 import { splitTags } from "../tag-utils.js";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 
 const HALF_LIVES: Record<string, number> = {
   state: 30,
@@ -88,6 +89,16 @@ export class MariaDbAdapter implements DbAdapter {
         INDEX idx_status (status),
         INDEX idx_created (created_at),
         INDEX idx_type (type)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await this.pool.execute(`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(36) NOT NULL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        api_key VARCHAR(67) NOT NULL UNIQUE,
+        role ENUM('admin', 'user') NOT NULL DEFAULT 'user',
+        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
@@ -416,5 +427,60 @@ export class MariaDbAdapter implements DbAdapter {
 
   async findCandidateContexts(_scope: string[], _authorIds: string[]): Promise<ContextCandidate[]> {
     return [];
+  }
+
+  // ── Users ──
+
+  private static generateApiKey(): string {
+    return "sk-" + randomBytes(32).toString("hex");
+  }
+
+  private toUser(row: RowDataPacket): User {
+    return {
+      id: row.id,
+      name: row.name,
+      api_key: row.api_key,
+      role: row.role,
+      created_at: new Date(row.created_at).toISOString(),
+    };
+  }
+
+  async listUsers(): Promise<User[]> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM users ORDER BY created_at DESC");
+    return rows.map(r => this.toUser(r));
+  }
+
+  async getUserByApiKey(apiKey: string): Promise<User | null> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM users WHERE api_key = ?", [apiKey]);
+    return rows.length > 0 ? this.toUser(rows[0]) : null;
+  }
+
+  async insertUser(name: string, role: string): Promise<User> {
+    const id = randomUUID();
+    const apiKey = MariaDbAdapter.generateApiKey();
+    await this.pool.execute(
+      "INSERT INTO users (id, name, api_key, role) VALUES (?, ?, ?, ?)",
+      [id, name, apiKey, role]
+    );
+    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM users WHERE id = ?", [id]);
+    return this.toUser(rows[0]);
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    const [result] = await this.pool.execute<ResultSetHeader>("DELETE FROM users WHERE id = ?", [id]);
+    return result.affectedRows > 0;
+  }
+
+  async regenerateApiKey(id: string): Promise<User | null> {
+    const apiKey = MariaDbAdapter.generateApiKey();
+    const [result] = await this.pool.execute<ResultSetHeader>("UPDATE users SET api_key = ? WHERE id = ?", [apiKey, id]);
+    if (result.affectedRows === 0) return null;
+    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM users WHERE id = ?", [id]);
+    return this.toUser(rows[0]);
+  }
+
+  async userCount(): Promise<number> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT COUNT(*) as cnt FROM users");
+    return rows[0].cnt as number;
   }
 }

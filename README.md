@@ -205,7 +205,7 @@ Search uses **structured tags + full-text search** — no vector database, no em
 
 - **Transport**: HTTP with MCP protocol (Streamable HTTP)
 - **Storage**: SQLite (default) or MariaDB — switchable via env var
-- **Auth**: Bearer token (optional) — open by default, enable with `TRAPIC_API_KEYS`
+- **Auth**: Bearer token — manage users and API keys via Admin UI
 - **Deployment**: Docker, Kubernetes, or bare Node.js
 
 ## Database Adapters
@@ -269,27 +269,56 @@ MariaDB mode supports multiple replicas (`replicas: 2` by default). Remember to 
 
 ## Authentication
 
-By default, Trapic Core runs in **open mode** — no authentication required. This is suitable for localhost-only deployments.
+Trapic Core has a built-in user management system with an Admin UI for creating users and generating API keys.
 
-To enable authentication, set the `TRAPIC_API_KEYS` environment variable with one or more comma-separated API keys:
+### How It Works
+
+1. Set `TRAPIC_ADMIN_PASSWORD` to enable the Admin UI
+2. Open `http://localhost:3000/admin` in your browser
+3. Login with the admin password
+4. Create users — each user gets an auto-generated API key (`sk-...`)
+5. Use the API key as a Bearer token in MCP client config
+
+### Quick Start
 
 ```bash
-# Single key
-export TRAPIC_API_KEYS="sk-my-secret-key-123"
+# Enable admin UI with a password
+TRAPIC_ADMIN_PASSWORD=my-admin-password docker compose up
 
-# Multiple keys (e.g. one per team member or client)
-export TRAPIC_API_KEYS="sk-alice-key,sk-bob-key,sk-ci-key"
+# Then open http://localhost:3000/admin
 ```
 
-When API keys are configured, all requests to `/mcp` must include a `Bearer` token:
+### Auth Behavior
 
-```
-Authorization: Bearer sk-my-secret-key-123
-```
+| State | Behavior |
+|---|---|
+| No users + no admin password | **Open mode** — all requests accepted (localhost use) |
+| Admin password set, no users yet | Open mode — create users at `/admin` |
+| Users exist in database | **Bearer token required** — returns `401`/`403` if missing/invalid |
 
-The `/health` endpoint remains unauthenticated for load balancer health checks.
+### Admin UI Features
+
+- Create and delete users
+- Assign roles (`admin` / `user`)
+- View and copy API keys (masked by default)
+- Regenerate API keys (old key stops working immediately)
+
+### Admin API
+
+The Admin UI is backed by a REST API, protected by the admin password:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/admin/api/users` | List all users |
+| `POST` | `/admin/api/users` | Create user (`{ "name": "alice", "role": "user" }`) |
+| `DELETE` | `/admin/api/users/:id` | Delete a user |
+| `POST` | `/admin/api/users/:id/regenerate` | Regenerate API key |
+
+All admin API requests require `Authorization: Bearer <TRAPIC_ADMIN_PASSWORD>`.
 
 ### MCP Client Configuration with Auth
+
+After creating a user and getting an API key, configure your MCP client:
 
 **Claude Code / Cursor / Windsurf** — add `headers` to `.mcp.json`:
 
@@ -300,21 +329,14 @@ The `/health` endpoint remains unauthenticated for load balancer health checks.
       "type": "http",
       "url": "http://localhost:3000/mcp",
       "headers": {
-        "Authorization": "Bearer sk-my-secret-key-123"
+        "Authorization": "Bearer sk-a1b2c3d4..."
       }
     }
   }
 }
 ```
 
-### Auth Behavior
-
-| `TRAPIC_API_KEYS` | Behavior |
-|---|---|
-| Not set (default) | Open mode — all requests accepted |
-| Set | Bearer token required — returns `401` if missing, `403` if invalid |
-
-Token validation uses constant-time comparison to prevent timing attacks.
+The `/health` endpoint remains unauthenticated for load balancer health checks.
 
 ## Configuration
 
@@ -323,9 +345,9 @@ Token validation uses constant-time comparison to prevent timing attacks.
 | `TRAPIC_PORT` | `3000` | Server port |
 | `TRAPIC_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` to expose) |
 | `TRAPIC_DB` | `./data/trapic.db` | SQLite database path |
-| `TRAPIC_USER` | `local-user` | Default user ID |
+| `TRAPIC_USER` | `local-user` | Default user ID (used in open mode) |
 | `TRAPIC_DB_ADAPTER` | `sqlite` | Database backend: `sqlite` or `mariadb` |
-| `TRAPIC_API_KEYS` | — | Comma-separated API keys for Bearer auth |
+| `TRAPIC_ADMIN_PASSWORD` | — | Admin password (enables Admin UI at `/admin`) |
 
 ## Cloud Version
 

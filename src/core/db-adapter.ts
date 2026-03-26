@@ -83,6 +83,14 @@ export interface ContextCandidate {
   trace_count: number;
 }
 
+export interface User {
+  id: string;
+  name: string;
+  api_key: string;
+  role: string;        // "admin" | "user"
+  created_at: string;
+}
+
 // ── Adapter Interface ────────────────────────────────────────
 
 export interface DbAdapter {
@@ -131,4 +139,18 @@ export interface DbAdapter {
   // ── Context (optional, for recall) ──
   /** Find candidate context clusters */
   findCandidateContexts?(tags: string[], authorIds: string[]): Promise<ContextCandidate[]>;
+
+  // ── Users ──
+  /** List all users */
+  listUsers(): Promise<User[]>;
+  /** Look up a user by API key (for auth) */
+  getUserByApiKey(apiKey: string): Promise<User | null>;
+  /** Create a new user with auto-generated id and api_key */
+  insertUser(name: string, role: string): Promise<User>;
+  /** Delete a user by id */
+  deleteUser(id: string): Promise<boolean>;
+  /** Regenerate api_key for a user */
+  regenerateApiKey(id: string): Promise<User | null>;
+  /** Count total users */
+  userCount(): Promise<number>;
 }
