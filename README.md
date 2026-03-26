@@ -1,14 +1,14 @@
-# Trapic Core — Self-Hosted AI Knowledge Memory Engine
+# Trapic Core
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE) [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 
-> **Long-term memory for AI coding assistants. Self-hosted, SQLite or MariaDB, zero vendor dependencies.**
+> Self-hosted long-term memory for AI coding assistants.
 
-Trapic Core is a standalone [MCP](https://modelcontextprotocol.io) server that gives your AI assistant persistent memory across sessions. Decisions, conventions, and discoveries are captured, searched, and recalled — automatically.
+Your AI forgets everything between sessions. Trapic Core is an [MCP](https://modelcontextprotocol.io) server that fixes that — decisions, conventions, and discoveries are captured as structured traces, searched by tags and keywords, and recalled automatically at session start.
+
+No vector database. No embeddings. No API costs.
 
 ## Quick Start
-
-### Docker (recommended)
 
 ```bash
 git clone https://github.com/nickjazz/trapic-core.git
@@ -16,35 +16,7 @@ cd trapic-core
 docker compose up
 ```
 
-Server runs at `http://localhost:3000/mcp`.
-
-### Node.js
-
-```bash
-git clone https://github.com/nickjazz/trapic-core.git
-cd trapic-core
-npm install
-npm run build
-npm start
-```
-
-## MCP Server
-
-Trapic Core is a fully compliant [Model Context Protocol](https://modelcontextprotocol.io) server. It uses **Streamable HTTP** transport via `@modelcontextprotocol/sdk`, exposing a single endpoint at `/mcp`.
-
-### Protocol Details
-
-| Property | Value |
-|----------|-------|
-| **Server name** | `trapic-mcp` |
-| **Transport** | Streamable HTTP (`POST /mcp`) |
-| **SDK** | `@modelcontextprotocol/sdk` |
-| **Auth** | Bearer token (optional — enabled via `TRAPIC_API_KEYS`) |
-| **Health check** | `GET /health` |
-
-### Connecting MCP Clients
-
-**Claude Code / Cursor / Windsurf** — add to `.mcp.json` in your project root:
+Server runs at `http://localhost:3000/mcp`. Connect your AI tool:
 
 ```json
 {
@@ -57,301 +29,200 @@ Trapic Core is a fully compliant [Model Context Protocol](https://modelcontextpr
 }
 ```
 
-**Claude Desktop** — add to `claude_desktop_config.json`:
+Save as `.mcp.json` in your project root (Claude Code, Cursor, Windsurf) or add to `claude_desktop_config.json` (Claude Desktop).
 
-```json
-{
-  "mcpServers": {
-    "trapic": {
-      "url": "http://localhost:3000/mcp"
-    }
-  }
-}
+## How It Works
+
+```
+AI writes code  →  captures knowledge  →  stored as structured traces
+AI starts session  →  recalls project context  →  instant briefing
+AI searches  →  tag + keyword query  →  precise results
 ```
 
-### MCP Tools
+Each knowledge trace:
 
-Trapic Core registers 9 MCP tools:
+```
+type:        decision | convention | fact | state | preference
+content:     "Chose CSS custom properties over Tailwind theme config"
+context:     "Tailwind doesn't support runtime theme switching"
+tags:        [topic:theming, topic:css, project:my-app, branch:main]
+confidence:  high | medium | low
+```
 
-#### `trapic-create`
+Tags with `project:` / `branch:` use AND logic (must all match). `topic:` tags use OR logic (any match counts). Combined with full-text search and recency scoring.
 
-Create a new knowledge trace (decision, convention, fact, state, preference).
+## MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `trapic-create` | Create a knowledge trace |
+| `trapic-search` | Search by tags, keywords, type, time range |
+| `trapic-recall` | Session briefing — load project context on startup |
+| `trapic-update` | Update content, status, tags, or supersede a trace |
+| `trapic-get` | Get full trace by ID |
+| `trapic-health` | Health report — type distribution, stale ratio, trends |
+| `trapic-decay` | Scan for stale knowledge (type-specific half-lives) |
+| `trapic-review-stale` | Confirm or deprecate a stale trace |
+| `trapic-import-git` | Bootstrap knowledge from git commit history |
+
+<details>
+<summary>Full parameter reference</summary>
+
+### trapic-create
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `content` | string | Yes | The knowledge content (max 5000 chars) |
-| `context` | string | No | Additional context or reasoning |
-| `tags` | string[] | No | Tags for categorization (e.g. `project:my-app`, `topic:auth`) |
-| `confidence` | `high` \| `medium` \| `low` | No | Confidence level (default: `medium`) |
+| `context` | string | No | Why — the causal explanation |
+| `tags` | string[] | No | Type + topic + project/branch tags |
+| `confidence` | `high` \| `medium` \| `low` | No | Default: `medium` |
 
-#### `trapic-search`
-
-Search traces by keywords, tags, type, and time range. Tags with `project:` / `branch:` prefix use AND logic; others use OR logic.
+### trapic-search
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string | No | Keyword search (max 500 chars) |
-| `tags` | string[] | No | Filter tags |
-| `status` | `active` \| `superseded` \| `deprecated` | No | Status filter (default: `active`) |
+| `tags` | string[] | No | Filter tags (project/branch = AND, topic = OR) |
+| `status` | `active` \| `superseded` \| `deprecated` | No | Default: `active` |
 | `types` | string[] | No | Filter by trace type |
-| `time_days` | number | No | Only return traces from the last N days |
+| `time_days` | number | No | Only last N days |
 | `limit` | number | No | Max results (default: 10, max: 50) |
 
-#### `trapic-recall`
-
-Session briefing — load project foundations, team updates, recent activity, and open plans. Call at the start of each session for automatic context loading.
+### trapic-recall
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `context` | string | Yes | What you're working on |
-| `project` | string | No | Project name to scope recall |
+| `project` | string | No | Project name to scope |
 | `tags` | string[] | No | Additional filter tags |
 | `max_contexts` | number | No | Max context clusters (default: 5, max: 10) |
 
-#### `trapic-update`
-
-Update an existing trace — change content, status, tags, or mark as superseded.
+### trapic-update
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trace_id` | UUID | Yes | The trace ID to update |
+| `trace_id` | UUID | Yes | Trace to update |
 | `content` | string | No | New content |
 | `context` | string | No | New context |
 | `status` | `active` \| `superseded` \| `deprecated` | No | New status |
-| `superseded_by` | UUID | No | ID of the trace that supersedes this one |
+| `superseded_by` | UUID | No | ID of replacing trace |
 | `tags` | string[] | No | New tags |
-| `confidence` | `high` \| `medium` \| `low` | No | New confidence level |
+| `confidence` | `high` \| `medium` \| `low` | No | New confidence |
 
-#### `trapic-get`
-
-Get the full content of a single trace by ID. Use after `trapic-search` to read complete details.
+### trapic-get
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trace_id` | UUID | Yes | The trace ID |
+| `trace_id` | UUID | Yes | Trace ID |
 
-#### `trapic-health`
-
-Knowledge health report — project health score, type distribution, stale/healthy ratio, and activity trends.
+### trapic-health
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project` | string | No | Project name to scope |
 | `tags` | string[] | No | Additional filter tags |
 
-#### `trapic-decay`
-
-Scan for stale/decaying knowledge. Traces decay based on type-specific half-lives (state: 30d, decision: 90d, convention: 180d, preference: 180d, fact: 365d).
+### trapic-decay
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project` | string | No | Project name to scope |
 | `tags` | string[] | No | Additional filter tags |
 | `threshold` | number | No | Decay score threshold (default: 0.3) |
-| `dry_run` | boolean | No | Preview only, don't flag traces (default: `true`) |
+| `dry_run` | boolean | No | Preview only (default: `true`) |
 
-#### `trapic-review-stale`
-
-Review a stale trace: confirm it's still valid (resets decay) or deprecate it.
+### trapic-review-stale
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trace_id` | UUID | Yes | The stale trace ID |
+| `trace_id` | UUID | Yes | Stale trace ID |
 | `action` | `confirm` \| `deprecate` | Yes | Confirm (reset decay) or deprecate |
 | `reason` | string | No | Reason for the action |
 
-#### `trapic-import-git`
-
-Import knowledge from git commit history. Analyzes commits and creates traces to bootstrap a project's knowledge base.
+### trapic-import-git
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `url` | string (URL) | Yes | Git repository URL (HTTP/HTTPS) |
+| `url` | string | Yes | Git repository URL (HTTPS) |
 | `project` | string | Yes | Project name |
-| `branch` | string | No | Branch to import (default: `main`) |
-| `max_commits` | number | No | Max commits to analyze (default: 100, max: 500) |
-| `since` | string | No | Only import commits after this date (YYYY-MM-DD) |
+| `branch` | string | No | Branch (default: `main`) |
+| `max_commits` | number | No | Max commits (default: 100, max: 500) |
+| `since` | string | No | After this date (YYYY-MM-DD) |
 | `dry_run` | boolean | No | Preview only (default: `true`) |
 
-## How It Works
+</details>
 
-```
-AI writes code → captures knowledge → stored as structured traces
-AI starts session → recalls project context → instant briefing
-AI searches → tag + keyword query → precise results, no embeddings
-```
+## Database
 
-Each knowledge trace has:
+Three backends, switchable via `TRAPIC_DB_ADAPTER`:
 
-```
-type:       decision | convention | fact | state | preference
-content:    "Chose CSS custom properties over Tailwind theme config"
-context:    "Tailwind doesn't support runtime theme switching"
-tags:       [topic:theming, topic:css, project:my-app]
-confidence: high | medium | low
-```
+| Backend | Best for | Scaling | Full-text search |
+|---------|----------|---------|-----------------|
+| **SQLite** (default) | Local dev, single user | Single instance | FTS5 |
+| **PostgreSQL** | Production, teams | Horizontal (multiple replicas) | tsvector + GIN |
+| **MariaDB** | Production, teams | Horizontal (multiple replicas) | FULLTEXT index |
 
-Search uses **structured tags + full-text search** — no vector database, no embeddings, no API costs.
+### SQLite
 
-## Architecture
-
-```
-┌─────────────┐     MCP/HTTP      ┌──────────────┐     SQLite      ┌──────────┐
-│  AI Client  │ ◄───────────────► │ Trapic Core  │ ◄─────────────► │ trapic.db│
-│ Claude Code │     localhost      │  MCP Server  │   or MariaDB   └──────────┘
-│ Cursor, etc │                   └──────────────┘
-└─────────────┘
-```
-
-- **Transport**: HTTP with MCP protocol (Streamable HTTP)
-- **Storage**: SQLite (default) or MariaDB — switchable via env var
-- **Auth**: Bearer token — manage users and API keys via Admin UI
-- **Deployment**: Docker, Kubernetes, or bare Node.js
-
-## Database Adapters
-
-Trapic Core supports two database backends, switchable via the `TRAPIC_DB_ADAPTER` environment variable.
-
-### SQLite (default)
-
-Zero-config, file-based storage. Best for single-instance deployments.
+Zero config. Data in `./data/trapic.db`.
 
 ```bash
-# Default — no extra config needed
 docker compose up
 ```
 
-### MariaDB
-
-Production-ready with connection pooling. Supports horizontal scaling (multiple replicas).
+### PostgreSQL
 
 ```bash
-# Docker Compose with MariaDB
-docker compose -f docker-compose.mariadb.yml up
+cp .env.example .env  # set PG_PASSWORD
+docker compose -f docker-compose.postgres.yml up
 ```
-
-MariaDB environment variables:
 
 | Env Variable | Default | Description |
 |-------------|---------|-------------|
-| `TRAPIC_DB_ADAPTER` | `sqlite` | Set to `mariadb` to use MariaDB |
-| `TRAPIC_MARIADB_HOST` | `localhost` | MariaDB host |
-| `TRAPIC_MARIADB_PORT` | `3306` | MariaDB port |
-| `TRAPIC_MARIADB_USER` | `trapic` | MariaDB user |
-| `TRAPIC_MARIADB_PASSWORD` | — | MariaDB password |
-| `TRAPIC_MARIADB_DATABASE` | `trapic` | MariaDB database name |
+| `TRAPIC_PG_HOST` | `localhost` | Host |
+| `TRAPIC_PG_PORT` | `5432` | Port |
+| `TRAPIC_PG_USER` | `trapic` | User |
+| `TRAPIC_PG_PASSWORD` | — | Password |
+| `TRAPIC_PG_DATABASE` | `trapic` | Database |
 
-## Kubernetes Deployment
-
-K8s manifests are provided in the `k8s/` directory.
-
-### SQLite mode (single replica)
+### MariaDB
 
 ```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/pvc.yaml
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
+cp .env.example .env  # set MARIADB_PASSWORD
+docker compose -f docker-compose.mariadb.yml up
 ```
 
-> **Note**: SQLite mode uses `replicas: 1` with `Recreate` strategy to avoid concurrent writes to the same database file.
-
-### MariaDB mode (scalable)
-
-```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/mariadb.yaml
-kubectl apply -f k8s/deployment-mariadb.yaml
-kubectl apply -f k8s/service.yaml
-```
-
-MariaDB mode supports multiple replicas (`replicas: 2` by default). Remember to update the `image` field in the deployment manifests to your container registry (e.g. `ghcr.io/nickjazz/trapic-core:latest`).
+| Env Variable | Default | Description |
+|-------------|---------|-------------|
+| `TRAPIC_MARIADB_HOST` | `localhost` | Host |
+| `TRAPIC_MARIADB_PORT` | `3306` | Port |
+| `TRAPIC_MARIADB_USER` | `trapic` | User |
+| `TRAPIC_MARIADB_PASSWORD` | — | Password |
+| `TRAPIC_MARIADB_DATABASE` | `trapic` | Database |
 
 ## Authentication
 
-Trapic Core has a built-in user management system with an Admin UI for creating users and generating API keys.
-
-### How It Works
-
-1. Set `TRAPIC_ADMIN_PASSWORD` to enable the Admin UI
-2. Open `http://localhost:3000/admin` in your browser
-3. Login with the admin password
-4. Create users — each user gets an auto-generated API key (`sk-...`)
-5. Use the API key as a Bearer token in MCP client config
-
-### Quick Start
+Open by default (localhost, no auth needed). Enable user management by setting an admin password:
 
 ```bash
-# Enable admin UI with a password
-TRAPIC_ADMIN_PASSWORD=my-admin-password docker compose up
-
-# Then open http://localhost:3000/admin
+TRAPIC_ADMIN_PASSWORD=my-secret docker compose up
 ```
 
-### Auth Behavior
+Then open `http://localhost:3000/admin` to create users and teams.
+
+### How auth works
 
 | State | Behavior |
-|---|---|
-| No users + no admin password | **Open mode** — all requests accepted (localhost use) |
+|-------|----------|
+| No users, no admin password | **Open mode** — all requests accepted |
 | Admin password set, no users yet | Open mode — create users at `/admin` |
-| Users exist in database | **Bearer token required** — returns `401`/`403` if missing/invalid |
+| Users exist in database | **Bearer token required** (`sk-...`) |
 
-### Admin UI Features
+### Users and API keys
 
-**Users tab:**
-- Create and delete users
-- Assign roles (`admin` / `user`)
-- View and copy API keys (masked by default)
-- Regenerate API keys (old key stops working immediately)
-
-**Teams tab:**
-- Create and delete teams
-- Add/remove users from teams
-- Users in the same team can see each other's traces
-
-### Teams
-
-Teams enable knowledge sharing between users. When users belong to the same team, they can search, recall, and view each other's traces.
-
-```
-Team: backend-team
-  ├── alice (can see bob's traces)
-  └── bob   (can see alice's traces)
-```
-
-A user can belong to multiple teams. Visibility is the union of all teammates across all teams.
-
-### Admin API
-
-The Admin UI is backed by a REST API, protected by the admin password:
-
-**Users:**
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/admin/api/users` | List all users |
-| `POST` | `/admin/api/users` | Create user (`{ "name": "alice", "role": "user" }`) |
-| `DELETE` | `/admin/api/users/:id` | Delete a user |
-| `POST` | `/admin/api/users/:id/regenerate` | Regenerate API key |
-
-**Teams:**
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/admin/api/teams` | List all teams |
-| `POST` | `/admin/api/teams` | Create team (`{ "name": "backend-team" }`) |
-| `DELETE` | `/admin/api/teams/:id` | Delete team and all memberships |
-| `GET` | `/admin/api/teams/:id/members` | List team members |
-| `POST` | `/admin/api/teams/:id/members` | Add member (`{ "user_id": "..." }`) |
-| `DELETE` | `/admin/api/teams/:id/members/:userId` | Remove member |
-
-All admin API requests require `Authorization: Bearer <TRAPIC_ADMIN_PASSWORD>`.
-
-### MCP Client Configuration with Auth
-
-After creating a user and getting an API key, configure your MCP client:
-
-**Claude Code / Cursor / Windsurf** — add `headers` to `.mcp.json`:
+1. Open Admin UI (`/admin`)
+2. Create user — gets auto-generated API key (`sk-...`)
+3. Configure MCP client with the key:
 
 ```json
 {
@@ -367,7 +238,80 @@ After creating a user and getting an API key, configure your MCP client:
 }
 ```
 
-The `/health` endpoint remains unauthenticated for load balancer health checks.
+API keys are stored as SHA-256 hashes. The plaintext key is shown only once at creation.
+
+### Teams
+
+Users in the same team can see each other's traces.
+
+```
+Team: backend-team
+  ├── alice (sees bob's traces)
+  └── bob   (sees alice's traces)
+```
+
+A user can belong to multiple teams.
+
+### Admin API
+
+All endpoints require `Authorization: Bearer <TRAPIC_ADMIN_PASSWORD>`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/admin/api/users` | List users |
+| `POST` | `/admin/api/users` | Create user |
+| `DELETE` | `/admin/api/users/:id` | Delete user |
+| `POST` | `/admin/api/users/:id/regenerate` | Regenerate API key |
+| `GET` | `/admin/api/teams` | List teams |
+| `POST` | `/admin/api/teams` | Create team |
+| `DELETE` | `/admin/api/teams/:id` | Delete team |
+| `GET` | `/admin/api/teams/:id/members` | List members |
+| `POST` | `/admin/api/teams/:id/members` | Add member |
+| `DELETE` | `/admin/api/teams/:id/members/:userId` | Remove member |
+
+## Deployment
+
+### Docker
+
+```bash
+# SQLite (default)
+docker compose up
+
+# PostgreSQL
+docker compose -f docker-compose.postgres.yml up
+
+# MariaDB
+docker compose -f docker-compose.mariadb.yml up
+```
+
+### Kubernetes
+
+Manifests in `k8s/`.
+
+**SQLite** (single replica):
+```bash
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/pvc.yaml
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+```
+
+**MariaDB** (scalable):
+```bash
+# Create secret first (copy from example, fill in passwords)
+cp k8s/mariadb-secret.example.yaml k8s/mariadb-secret.yaml
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/mariadb-secret.yaml
+kubectl apply -f k8s/mariadb.yaml
+kubectl apply -f k8s/deployment-mariadb.yaml
+kubectl apply -f k8s/service.yaml
+```
+
+### Node.js
+
+```bash
+npm install && npm run build && npm start
+```
 
 ## Configuration
 
@@ -375,16 +319,31 @@ The `/health` endpoint remains unauthenticated for load balancer health checks.
 |-------------|---------|-------------|
 | `TRAPIC_PORT` | `3000` | Server port |
 | `TRAPIC_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` to expose) |
+| `TRAPIC_DB_ADAPTER` | `sqlite` | `sqlite`, `postgres`, or `mariadb` |
 | `TRAPIC_DB` | `./data/trapic.db` | SQLite database path |
-| `TRAPIC_USER` | `local-user` | Default user ID (used in open mode) |
-| `TRAPIC_DB_ADAPTER` | `sqlite` | Database backend: `sqlite` or `mariadb` |
-| `TRAPIC_ADMIN_PASSWORD` | — | Admin password (enables Admin UI at `/admin`) |
+| `TRAPIC_USER` | `local-user` | Default user ID (open mode) |
+| `TRAPIC_ADMIN_PASSWORD` | — | Enables Admin UI at `/admin` |
+
+## Architecture
+
+```
+┌─────────────┐                    ┌──────────────┐                  ┌──────────────┐
+│  AI Client  │  ── MCP/HTTP ──►   │ Trapic Core  │  ── adapter ──►  │   Database   │
+│ Claude Code │  POST /mcp         │  MCP Server  │                  │ SQLite / PG  │
+│ Cursor, etc │  ◄── JSON ──       │              │                  │  / MariaDB   │
+└─────────────┘                    └──────────────┘                  └──────────────┘
+```
+
+- **Protocol**: [Model Context Protocol](https://modelcontextprotocol.io) (Streamable HTTP)
+- **Search**: Structured tags + full-text search, no embeddings
+- **Decay**: Type-specific half-lives (state: 30d, decision: 90d, convention: 180d, fact: 365d)
+- **Security**: API keys hashed (SHA-256), admin rate limiting, constant-time auth comparison
 
 ## Cloud Version
 
-Don't want to self-host? [trapic.ai](https://trapic.ai) offers a hosted version with team collaboration and managed infrastructure.
+Don't want to self-host? [trapic.ai](https://trapic.ai) offers a managed version with OAuth login and team collaboration.
 
-Use the [Trapic Plugin](https://github.com/nickjazz/trapic-plugin) for one-click setup with the cloud version.
+Use the [Trapic Plugin](https://github.com/nickjazz/trapic-plugin) for one-click setup.
 
 ## License
 

@@ -226,16 +226,18 @@ function renderUsers(users) {
       '<td><strong>' + esc(u.name) + '</strong></td>' +
       '<td><span class="role-badge ' + rc + '">' + esc(u.role) + '</span></td>' +
       '<td class="key-cell"><span id="key-' + u.id + '">' + maskKey(u.api_key) + '</span> ' +
-        '<button class="btn-ghost btn-sm" onclick="toggleKey(this,\\'' + esc(u.api_key) + '\\',\\'' + u.id + '\\')">Show</button></td>' +
+        '<button class="btn-ghost btn-sm" data-key="' + esc(u.api_key) + '" data-id="' + esc(u.id) + '" onclick="toggleKey(this)">Show</button></td>' +
       '<td>' + created + '</td>' +
       '<td class="actions">' +
-        '<button class="btn-ghost btn-sm" onclick="regenKey(\\'' + u.id + '\\')">Regenerate</button>' +
-        '<button class="btn-danger btn-sm" onclick="deleteUser(\\'' + u.id + '\\',\\'' + esc(u.name) + '\\')">Delete</button>' +
+        '<button class="btn-ghost btn-sm" data-id="' + esc(u.id) + '" onclick="regenKey(this.dataset.id)">Regenerate</button>' +
+        '<button class="btn-danger btn-sm" data-id="' + esc(u.id) + '" data-name="' + esc(u.name) + '" onclick="deleteUser(this.dataset.id, this.dataset.name)">Delete</button>' +
       '</td></tr>';
   }).join('');
 }
 
-function toggleKey(btn, key, id) {
+function toggleKey(btn) {
+  const key = btn.dataset.key;
+  const id = btn.dataset.id;
   const span = document.getElementById('key-' + id);
   if (btn.textContent === 'Show') { span.textContent = key; btn.textContent = 'Hide'; }
   else { span.textContent = maskKey(key); btn.textContent = 'Show'; }

@@ -28,6 +28,7 @@ export interface Trace {
 export interface TraceInsert {
   content: string;
   context?: string | null;
+  type?: string;            // "decision" | "fact" | "convention" | "state" | "preference"
   author: string;
   tags: string[];           // includes project:*, branch:* alongside topic tags
   confidence: string;
@@ -108,6 +109,10 @@ export interface TeamMember {
 // ── Adapter Interface ────────────────────────────────────────
 
 export interface DbAdapter {
+  // ── Lifecycle ──
+  /** Graceful shutdown — close connections/pools */
+  close?(): Promise<void>;
+
   // ── Trace CRUD ──
   /** Insert a new trace. Returns { id: string } */
   insertTrace(trace: TraceInsert): Promise<{ id: string } | null>;

@@ -4,10 +4,10 @@ services:
     ports:
       - "3306:3306"
     environment:
-      - MARIADB_ROOT_PASSWORD=rootpass
+      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD:?Set MARIADB_ROOT_PASSWORD in .env}
       - MARIADB_DATABASE=trapic
       - MARIADB_USER=trapic
-      - MARIADB_PASSWORD=trapicpass
+      - MARIADB_PASSWORD=${MARIADB_PASSWORD:?Set MARIADB_PASSWORD in .env}
     volumes:
       - mariadb_data:/var/lib/mysql
     healthcheck:
@@ -29,7 +29,7 @@ services:
       - TRAPIC_MARIADB_HOST=mariadb
       - TRAPIC_MARIADB_PORT=3306
       - TRAPIC_MARIADB_USER=trapic
-      - TRAPIC_MARIADB_PASSWORD=trapicpass
+      - TRAPIC_MARIADB_PASSWORD=${MARIADB_PASSWORD:?Set MARIADB_PASSWORD in .env}
       - TRAPIC_MARIADB_DATABASE=trapic
 
 volumes:

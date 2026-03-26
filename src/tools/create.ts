@@ -36,9 +36,14 @@ export function registerCreate(server: McpServer, userId: string | null, db: DbA
           return { content: [{ type: "text" as const, text: `Monthly trace limit reached (${quota.used}/${quota.limit}).` }] };
         }
 
+        // Extract type from tags (first tag matching a known type)
+        const TRACE_TYPES = ["decision", "fact", "convention", "state", "preference"];
+        const type = params.tags.find(t => TRACE_TYPES.includes(t)) ?? "decision";
+
         const result = await db.insertTrace({
           content: params.content,
           context: params.context ?? null,
+          type,
           author: userId,
           tags: params.tags,
           confidence: params.confidence,

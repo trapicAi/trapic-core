@@ -1,16 +1,16 @@
 /**
- * MariaDB/MySQL Database Adapter
+ * PostgreSQL Database Adapter
  *
- * Implements DbAdapter using mysql2 for production deployments.
- * Supports MariaDB and MySQL. Uses FULLTEXT indexes for search.
+ * Implements DbAdapter using pg (node-postgres) for production deployments.
+ * Uses tsvector/tsquery for full-text search. Supports connection pooling.
  *
  * Usage:
- *   const db = await MariaDbAdapter.create({
- *     host: "localhost", port: 3306,
+ *   const db = await PostgresDbAdapter.create({
+ *     host: "localhost", port: 5432,
  *     user: "trapic", password: "secret", database: "trapic"
  *   });
  */
-import mysql, { Pool, PoolOptions, RowDataPacket, ResultSetHeader } from "mysql2/promise";
+import pg from "pg";
 import {
   DbAdapter,
   Trace,
@@ -27,6 +27,8 @@ import {
 import { splitTags } from "../tag-utils.js";
 import { randomUUID, randomBytes, createHash } from "crypto";
 
+const { Pool } = pg;
+
 function hashApiKey(key: string): string {
   return createHash("sha256").update(key).digest("hex");
 }
@@ -39,19 +41,19 @@ const HALF_LIVES: Record<string, number> = {
   fact: 365,
 };
 
-export interface MariaDbConfig {
+export interface PostgresConfig {
   host: string;
   port: number;
   user: string;
   password: string;
   database: string;
-  connectionLimit?: number;
+  max?: number; // pool size
 }
 
-export class MariaDbAdapter implements DbAdapter {
-  private pool: Pool;
+export class PostgresDbAdapter implements DbAdapter {
+  private pool: pg.Pool;
 
-  private constructor(pool: Pool) {
+  private constructor(pool: pg.Pool) {
     this.pool = pool;
   }
 
@@ -59,76 +61,81 @@ export class MariaDbAdapter implements DbAdapter {
     await this.pool.end();
   }
 
-  static async create(config: MariaDbConfig): Promise<MariaDbAdapter> {
-    const poolOpts: PoolOptions = {
+  static async create(config: PostgresConfig): Promise<PostgresDbAdapter> {
+    const pool = new Pool({
       host: config.host,
       port: config.port,
       user: config.user,
       password: config.password,
       database: config.database,
-      connectionLimit: config.connectionLimit ?? 10,
-      charset: "utf8mb4",
-    };
-    const pool = mysql.createPool(poolOpts);
-    const adapter = new MariaDbAdapter(pool);
+      max: config.max ?? 10,
+    });
+    const adapter = new PostgresDbAdapter(pool);
     await adapter.initSchema();
     return adapter;
   }
 
   private async initSchema(): Promise<void> {
-    await this.pool.execute(`
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS traces (
-        id VARCHAR(36) NOT NULL PRIMARY KEY,
+        id UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
         content TEXT NOT NULL,
         context TEXT,
-        status ENUM('active', 'superseded', 'deprecated') NOT NULL DEFAULT 'active',
-        type ENUM('decision', 'fact', 'convention', 'state', 'preference') NOT NULL DEFAULT 'decision',
-        tags JSON NOT NULL,
-        confidence ENUM('high', 'medium', 'low') NOT NULL DEFAULT 'medium',
-        author VARCHAR(255) NOT NULL,
-        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-        updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-        superseded_by VARCHAR(36),
-        decay_score DOUBLE NOT NULL DEFAULT 1.0,
-        flagged_for_review TINYINT(1) NOT NULL DEFAULT 0,
-        last_reviewed_at DATETIME(3),
-        access_count INT NOT NULL DEFAULT 0,
-        last_accessed_at DATETIME(3),
-        FULLTEXT INDEX ft_content (content, context),
-        INDEX idx_author (author),
-        INDEX idx_status (status),
-        INDEX idx_created (created_at),
-        INDEX idx_type (type)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'deprecated')),
+        type TEXT NOT NULL DEFAULT 'decision' CHECK (type IN ('decision', 'fact', 'convention', 'state', 'preference')),
+        tags JSONB NOT NULL DEFAULT '[]',
+        confidence TEXT NOT NULL DEFAULT 'medium' CHECK (confidence IN ('high', 'medium', 'low')),
+        author TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        superseded_by UUID,
+        decay_score DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+        flagged_for_review BOOLEAN NOT NULL DEFAULT FALSE,
+        last_reviewed_at TIMESTAMPTZ,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        last_accessed_at TIMESTAMPTZ,
+        search_vec TSVECTOR GENERATED ALWAYS AS (
+          setweight(to_tsvector('english', coalesce(content, '')), 'A') ||
+          setweight(to_tsvector('english', coalesce(context, '')), 'B')
+        ) STORED
+      )
     `);
 
-    await this.pool.execute(`
+    // Indexes
+    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_traces_author ON traces(author)`);
+    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_traces_status ON traces(status)`);
+    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at)`);
+    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_traces_type ON traces(type)`);
+    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_traces_tags ON traces USING GIN(tags)`);
+    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_traces_search ON traces USING GIN(search_vec)`);
+
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS users (
-        id VARCHAR(36) NOT NULL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        api_key_hash VARCHAR(64) NOT NULL UNIQUE,
-        api_key_prefix VARCHAR(10) NOT NULL DEFAULT '',
-        role ENUM('admin', 'user') NOT NULL DEFAULT 'user',
-        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        id UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+        name TEXT NOT NULL,
+        api_key_hash TEXT NOT NULL UNIQUE,
+        api_key_prefix TEXT NOT NULL DEFAULT '',
+        role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
     `);
 
-    await this.pool.execute(`
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS teams (
-        id VARCHAR(36) NOT NULL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        id UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+        name TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
     `);
 
-    await this.pool.execute(`
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS team_members (
-        id VARCHAR(36) NOT NULL PRIMARY KEY,
-        team_id VARCHAR(36) NOT NULL,
-        user_id VARCHAR(36) NOT NULL,
-        role VARCHAR(50) NOT NULL DEFAULT 'member',
-        UNIQUE KEY uq_team_user (team_id, user_id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        id UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+        team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        UNIQUE(team_id, user_id)
+      )
     `);
   }
 
@@ -140,13 +147,7 @@ export class MariaDbAdapter implements DbAdapter {
     return [];
   }
 
-  private formatDate(d: Date | string | null): string | null {
-    if (!d) return null;
-    const date = typeof d === "string" ? new Date(d) : d;
-    return date.toISOString().replace("Z", "").replace("T", "T");
-  }
-
-  private toTrace(row: RowDataPacket): Trace {
+  private toTrace(row: pg.QueryResultRow): Trace {
     return {
       id: row.id,
       content: row.content,
@@ -158,7 +159,7 @@ export class MariaDbAdapter implements DbAdapter {
       author: row.author,
       created_at: new Date(row.created_at).toISOString(),
       updated_at: new Date(row.updated_at ?? row.created_at).toISOString(),
-      flagged_for_review: row.flagged_for_review === 1,
+      flagged_for_review: row.flagged_for_review === true,
       superseded_by: row.superseded_by ?? null,
     };
   }
@@ -167,8 +168,8 @@ export class MariaDbAdapter implements DbAdapter {
 
   async insertTrace(trace: TraceInsert): Promise<{ id: string } | null> {
     const id = randomUUID();
-    await this.pool.execute(
-      `INSERT INTO traces (id, content, context, type, author, tags, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    await this.pool.query(
+      `INSERT INTO traces (id, content, context, type, author, tags, confidence) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [id, trace.content, trace.context ?? null, trace.type ?? "decision", trace.author, JSON.stringify(trace.tags), trace.confidence]
     );
     return { id };
@@ -176,9 +177,9 @@ export class MariaDbAdapter implements DbAdapter {
 
   async getTraceFull(traceId: string, authorIds: string[]): Promise<Trace | null> {
     if (authorIds.length === 0) return null;
-    const placeholders = authorIds.map(() => "?").join(",");
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM traces WHERE id = ? AND author IN (${placeholders})`,
+    const placeholders = authorIds.map((_, i) => `$${i + 2}`).join(",");
+    const { rows } = await this.pool.query(
+      `SELECT * FROM traces WHERE id = $1 AND author IN (${placeholders})`,
       [traceId, ...authorIds]
     );
     return rows.length > 0 ? this.toTrace(rows[0]) : null;
@@ -187,23 +188,26 @@ export class MariaDbAdapter implements DbAdapter {
   async updateTrace(traceId: string, authorId: string, update: TraceUpdate): Promise<Trace | null> {
     const sets: string[] = [];
     const values: (string | null)[] = [];
+    let idx = 1;
 
-    if (update.content !== undefined) { sets.push("content = ?"); values.push(update.content); }
-    if (update.context !== undefined) { sets.push("context = ?"); values.push(update.context); }
-    if (update.status !== undefined) { sets.push("status = ?"); values.push(update.status); }
+    if (update.content !== undefined) { sets.push(`content = $${idx++}`); values.push(update.content); }
+    if (update.context !== undefined) { sets.push(`context = $${idx++}`); values.push(update.context); }
+    if (update.status !== undefined) { sets.push(`status = $${idx++}`); values.push(update.status); }
     if (update.superseded_by !== undefined) {
-      sets.push("superseded_by = ?"); values.push(update.superseded_by ?? null);
+      sets.push(`superseded_by = $${idx++}`); values.push(update.superseded_by ?? null);
       sets.push("status = 'superseded'");
     }
-    if (update.tags !== undefined) { sets.push("tags = ?"); values.push(JSON.stringify(update.tags)); }
-    if (update.confidence !== undefined) { sets.push("confidence = ?"); values.push(update.confidence); }
+    if (update.tags !== undefined) { sets.push(`tags = $${idx++}`); values.push(JSON.stringify(update.tags)); }
+    if (update.confidence !== undefined) { sets.push(`confidence = $${idx++}`); values.push(update.confidence); }
 
     if (sets.length === 0) return null;
 
+    sets.push("updated_at = NOW()");
     values.push(traceId, authorId);
-    await this.pool.execute(
-      `UPDATE traces SET ${sets.join(", ")} WHERE id = ? AND author = ?`,
-      values as string[]
+
+    await this.pool.query(
+      `UPDATE traces SET ${sets.join(", ")} WHERE id = $${idx++} AND author = $${idx}`,
+      values
     );
 
     return this.getTraceFull(traceId, [authorId]);
@@ -212,20 +216,21 @@ export class MariaDbAdapter implements DbAdapter {
   async filterTraces(params: FilterParams): Promise<Trace[]> {
     const conditions: string[] = [];
     const values: (string | number)[] = [];
+    let idx = 1;
 
     if (params.status) {
-      conditions.push("status = ?");
+      conditions.push(`status = $${idx++}`);
       values.push(params.status);
     }
 
     if (params.author_ids.length > 0) {
-      const ph = params.author_ids.map(() => "?").join(",");
+      const ph = params.author_ids.map(() => `$${idx++}`).join(",");
       conditions.push(`author IN (${ph})`);
       values.push(...params.author_ids);
     }
 
     if (params.types && params.types.length > 0) {
-      const ph = params.types.map(() => "?").join(",");
+      const ph = params.types.map(() => `$${idx++}`).join(",");
       conditions.push(`type IN (${ph})`);
       values.push(...params.types);
     }
@@ -233,21 +238,21 @@ export class MariaDbAdapter implements DbAdapter {
     if (params.time_days) {
       const days = Math.floor(Math.abs(Number(params.time_days)));
       if (days > 0) {
-        conditions.push("created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)");
-        values.push(days);
+        conditions.push(`created_at >= NOW() - $${idx++}::interval`);
+        values.push(`${days} days`);
       }
     }
 
     if (params.exclude_stale) {
-      conditions.push("flagged_for_review = 0");
+      conditions.push("flagged_for_review = FALSE");
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const { scope: scopeTags, filter: filterTags } = splitTags(params.tags ?? []);
 
     const limit = params.limit ?? 50;
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT * FROM traces ${where} ORDER BY created_at DESC LIMIT ?`,
+    const { rows } = await this.pool.query(
+      `SELECT * FROM traces ${where} ORDER BY created_at DESC LIMIT $${idx}`,
       [...values, limit * 5]
     );
 
@@ -295,9 +300,9 @@ export class MariaDbAdapter implements DbAdapter {
 
   async incrementAccessCount(traceIds: string[]): Promise<void> {
     if (traceIds.length === 0) return;
-    const ph = traceIds.map(() => "?").join(",");
-    await this.pool.execute(
-      `UPDATE traces SET access_count = access_count + 1, last_accessed_at = NOW(3) WHERE id IN (${ph})`,
+    const ph = traceIds.map((_, i) => `$${i + 1}`).join(",");
+    await this.pool.query(
+      `UPDATE traces SET access_count = access_count + 1, last_accessed_at = NOW() WHERE id IN (${ph})`,
       traceIds
     );
   }
@@ -305,15 +310,15 @@ export class MariaDbAdapter implements DbAdapter {
   // ── Team access ──
 
   async getVisibleAuthorIds(userId: string): Promise<string[]> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
+    const { rows } = await this.pool.query(
       `SELECT DISTINCT u2.name FROM users u1
        JOIN team_members tm1 ON tm1.user_id = u1.id
        JOIN team_members tm2 ON tm1.team_id = tm2.team_id
        JOIN users u2 ON tm2.user_id = u2.id
-       WHERE u1.name = ?`,
+       WHERE u1.name = $1`,
       [userId]
     );
-    const ids = rows.map(r => r.name as string);
+    const ids = rows.map((r: pg.QueryResultRow) => r.name as string);
     if (!ids.includes(userId)) ids.push(userId);
     return ids;
   }
@@ -327,8 +332,8 @@ export class MariaDbAdapter implements DbAdapter {
     scope?: string[];
   }): Promise<DecayResult[]> {
     if (params.author_ids.length === 0) return [];
-    const ph = params.author_ids.map(() => "?").join(",");
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
+    const ph = params.author_ids.map((_, i) => `$${i + 1}`).join(",");
+    const { rows } = await this.pool.query(
       `SELECT * FROM traces WHERE status = 'active' AND author IN (${ph})`,
       params.author_ids
     );
@@ -352,8 +357,8 @@ export class MariaDbAdapter implements DbAdapter {
 
       if (decayScore < params.flag_threshold) {
         if (!params.dry_run) {
-          await this.pool.execute(
-            `UPDATE traces SET decay_score = ?, flagged_for_review = 1 WHERE id = ?`,
+          await this.pool.query(
+            `UPDATE traces SET decay_score = $1, flagged_for_review = TRUE WHERE id = $2`,
             [Math.round(decayScore * 1000) / 1000, trace.id]
           );
         }
@@ -377,9 +382,9 @@ export class MariaDbAdapter implements DbAdapter {
 
   async getTraceForReview(traceId: string, authorIds: string[]): Promise<{ id: string; author: string; content: string } | null> {
     if (authorIds.length === 0) return null;
-    const ph = authorIds.map(() => "?").join(",");
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT id, author, content FROM traces WHERE id = ? AND author IN (${ph})`,
+    const ph = authorIds.map((_, i) => `$${i + 2}`).join(",");
+    const { rows } = await this.pool.query(
+      `SELECT id, author, content FROM traces WHERE id = $1 AND author IN (${ph})`,
       [traceId, ...authorIds]
     );
     return rows.length > 0 ? { id: rows[0].id, author: rows[0].author, content: rows[0].content } : null;
@@ -387,48 +392,48 @@ export class MariaDbAdapter implements DbAdapter {
 
   async confirmStaleTrace(traceId: string, authorIds: string[]): Promise<boolean> {
     if (authorIds.length === 0) return false;
-    const ph = authorIds.map(() => "?").join(",");
-    const [result] = await this.pool.execute<ResultSetHeader>(
-      `UPDATE traces SET last_reviewed_at = NOW(3), decay_score = 1.0, flagged_for_review = 0
-       WHERE id = ? AND author IN (${ph})`,
+    const ph = authorIds.map((_, i) => `$${i + 2}`).join(",");
+    const result = await this.pool.query(
+      `UPDATE traces SET last_reviewed_at = NOW(), decay_score = 1.0, flagged_for_review = FALSE
+       WHERE id = $1 AND author IN (${ph})`,
       [traceId, ...authorIds]
     );
-    return result.affectedRows > 0;
+    return (result.rowCount ?? 0) > 0;
   }
 
   async deprecateStaleTrace(traceId: string, authorIds: string[]): Promise<boolean> {
     if (authorIds.length === 0) return false;
-    const ph = authorIds.map(() => "?").join(",");
-    const [result] = await this.pool.execute<ResultSetHeader>(
-      `UPDATE traces SET status = 'deprecated', flagged_for_review = 0
-       WHERE id = ? AND author IN (${ph})`,
+    const ph = authorIds.map((_, i) => `$${i + 2}`).join(",");
+    const result = await this.pool.query(
+      `UPDATE traces SET status = 'deprecated', flagged_for_review = FALSE
+       WHERE id = $1 AND author IN (${ph})`,
       [traceId, ...authorIds]
     );
-    return result.affectedRows > 0;
+    return (result.rowCount ?? 0) > 0;
   }
 
   // ── Health ──
 
   async getKnowledgeHealth(tags: string[], authorIds: string[]): Promise<HealthData | null> {
     if (authorIds.length === 0) return null;
-    const ph = authorIds.map(() => "?").join(",");
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
+    const ph = authorIds.map((_, i) => `$${i + 1}`).join(",");
+    const { rows } = await this.pool.query(
       `SELECT * FROM traces WHERE author IN (${ph})`,
       authorIds
     );
 
     const { scope: scopeTags } = splitTags(tags);
     const filtered = scopeTags.length > 0
-      ? rows.filter(r => scopeTags.every(s => this.parseTags(r.tags).includes(s)))
+      ? rows.filter((r: pg.QueryResultRow) => scopeTags.every(s => this.parseTags(r.tags).includes(s)))
       : rows;
 
     const now = Date.now();
-    const active = filtered.filter(r => r.status === "active");
-    const healthy = active.filter(r => !r.flagged_for_review);
-    const stale = active.filter(r => r.flagged_for_review);
+    const active = filtered.filter((r: pg.QueryResultRow) => r.status === "active");
+    const healthy = active.filter((r: pg.QueryResultRow) => !r.flagged_for_review);
+    const stale = active.filter((r: pg.QueryResultRow) => r.flagged_for_review);
 
-    const recent7d = active.filter(r => (now - new Date(r.created_at).getTime()) < 7 * 86400000);
-    const recent30d = active.filter(r => (now - new Date(r.created_at).getTime()) < 30 * 86400000);
+    const recent7d = active.filter((r: pg.QueryResultRow) => (now - new Date(r.created_at).getTime()) < 7 * 86400000);
+    const recent30d = active.filter((r: pg.QueryResultRow) => (now - new Date(r.created_at).getTime()) < 30 * 86400000);
 
     const byType: Record<string, number> = {};
     for (const r of active) {
@@ -457,7 +462,7 @@ export class MariaDbAdapter implements DbAdapter {
     return "sk-" + randomBytes(32).toString("hex");
   }
 
-  private toUser(row: RowDataPacket, plaintextKey?: string): User {
+  private toUser(row: pg.QueryResultRow, plaintextKey?: string): User {
     return {
       id: row.id,
       name: row.name,
@@ -468,86 +473,76 @@ export class MariaDbAdapter implements DbAdapter {
   }
 
   async listUsers(): Promise<User[]> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM users ORDER BY created_at DESC");
-    return rows.map(r => this.toUser(r));
+    const { rows } = await this.pool.query("SELECT * FROM users ORDER BY created_at DESC");
+    return rows.map((r: pg.QueryResultRow) => this.toUser(r));
   }
 
   async getUserByApiKey(apiKey: string): Promise<User | null> {
     const hash = hashApiKey(apiKey);
-    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM users WHERE api_key_hash = ?", [hash]);
+    const { rows } = await this.pool.query("SELECT * FROM users WHERE api_key_hash = $1", [hash]);
     return rows.length > 0 ? this.toUser(rows[0]) : null;
   }
 
   async insertUser(name: string, role: string): Promise<User> {
     const id = randomUUID();
-    const apiKey = MariaDbAdapter.generateApiKey();
+    const apiKey = PostgresDbAdapter.generateApiKey();
     const hash = hashApiKey(apiKey);
     const prefix = apiKey.slice(0, 7);
-    await this.pool.execute(
-      "INSERT INTO users (id, name, api_key_hash, api_key_prefix, role) VALUES (?, ?, ?, ?, ?)",
+    await this.pool.query(
+      "INSERT INTO users (id, name, api_key_hash, api_key_prefix, role) VALUES ($1, $2, $3, $4, $5)",
       [id, name, hash, prefix, role]
     );
-    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM users WHERE id = ?", [id]);
+    const { rows } = await this.pool.query("SELECT * FROM users WHERE id = $1", [id]);
     return this.toUser(rows[0], apiKey);
   }
 
   async deleteUser(id: string): Promise<boolean> {
-    const [result] = await this.pool.execute<ResultSetHeader>("DELETE FROM users WHERE id = ?", [id]);
-    return result.affectedRows > 0;
+    const result = await this.pool.query("DELETE FROM users WHERE id = $1", [id]);
+    return (result.rowCount ?? 0) > 0;
   }
 
   async regenerateApiKey(id: string): Promise<User | null> {
-    const apiKey = MariaDbAdapter.generateApiKey();
+    const apiKey = PostgresDbAdapter.generateApiKey();
     const hash = hashApiKey(apiKey);
     const prefix = apiKey.slice(0, 7);
-    const [result] = await this.pool.execute<ResultSetHeader>("UPDATE users SET api_key_hash = ?, api_key_prefix = ? WHERE id = ?", [hash, prefix, id]);
-    if (result.affectedRows === 0) return null;
-    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM users WHERE id = ?", [id]);
+    const result = await this.pool.query("UPDATE users SET api_key_hash = $1, api_key_prefix = $2 WHERE id = $3", [hash, prefix, id]);
+    if ((result.rowCount ?? 0) === 0) return null;
+    const { rows } = await this.pool.query("SELECT * FROM users WHERE id = $1", [id]);
     return this.toUser(rows[0], apiKey);
   }
 
   async userCount(): Promise<number> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT COUNT(*) as cnt FROM users");
-    return rows[0].cnt as number;
+    const { rows } = await this.pool.query("SELECT COUNT(*) as cnt FROM users");
+    return parseInt(rows[0].cnt, 10);
   }
 
   // ── Teams ──
 
   async listTeams(): Promise<Team[]> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM teams ORDER BY created_at DESC");
-    return rows.map(r => ({ id: r.id, name: r.name, created_at: new Date(r.created_at).toISOString() }));
+    const { rows } = await this.pool.query("SELECT * FROM teams ORDER BY created_at DESC");
+    return rows.map((r: pg.QueryResultRow) => ({ id: r.id, name: r.name, created_at: new Date(r.created_at).toISOString() }));
   }
 
   async insertTeam(name: string): Promise<Team> {
     const id = randomUUID();
-    await this.pool.execute("INSERT INTO teams (id, name) VALUES (?, ?)", [id, name]);
-    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM teams WHERE id = ?", [id]);
+    await this.pool.query("INSERT INTO teams (id, name) VALUES ($1, $2)", [id, name]);
+    const { rows } = await this.pool.query("SELECT * FROM teams WHERE id = $1", [id]);
     return { id: rows[0].id, name: rows[0].name, created_at: new Date(rows[0].created_at).toISOString() };
   }
 
   async deleteTeam(id: string): Promise<boolean> {
-    const conn = await this.pool.getConnection();
-    try {
-      await conn.beginTransaction();
-      await conn.execute("DELETE FROM team_members WHERE team_id = ?", [id]);
-      const [result] = await conn.execute<ResultSetHeader>("DELETE FROM teams WHERE id = ?", [id]);
-      await conn.commit();
-      return result.affectedRows > 0;
-    } catch (e) {
-      await conn.rollback();
-      throw e;
-    } finally {
-      conn.release();
-    }
+    // team_members has ON DELETE CASCADE, so just delete the team
+    const result = await this.pool.query("DELETE FROM teams WHERE id = $1", [id]);
+    return (result.rowCount ?? 0) > 0;
   }
 
   async listTeamMembers(teamId: string): Promise<TeamMember[]> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(
+    const { rows } = await this.pool.query(
       `SELECT tm.id, tm.team_id, tm.user_id, tm.role, u.name as user_name
        FROM team_members tm LEFT JOIN users u ON tm.user_id = u.id
-       WHERE tm.team_id = ?`, [teamId]
+       WHERE tm.team_id = $1`, [teamId]
     );
-    return rows.map(r => ({
+    return rows.map((r: pg.QueryResultRow) => ({
       id: r.id, team_id: r.team_id, user_id: r.user_id,
       role: r.role, user_name: r.user_name ?? undefined,
     }));
@@ -555,17 +550,17 @@ export class MariaDbAdapter implements DbAdapter {
 
   async addTeamMember(teamId: string, userId: string, role: string = "member"): Promise<TeamMember> {
     const id = randomUUID();
-    await this.pool.execute(
-      "INSERT INTO team_members (id, team_id, user_id, role) VALUES (?, ?, ?, ?)",
+    await this.pool.query(
+      "INSERT INTO team_members (id, team_id, user_id, role) VALUES ($1, $2, $3, $4)",
       [id, teamId, userId, role]
     );
     return { id, team_id: teamId, user_id: userId, role };
   }
 
   async removeTeamMember(teamId: string, userId: string): Promise<boolean> {
-    const [result] = await this.pool.execute<ResultSetHeader>(
-      "DELETE FROM team_members WHERE team_id = ? AND user_id = ?", [teamId, userId]
+    const result = await this.pool.query(
+      "DELETE FROM team_members WHERE team_id = $1 AND user_id = $2", [teamId, userId]
     );
-    return result.affectedRows > 0;
+    return (result.rowCount ?? 0) > 0;
   }
 }

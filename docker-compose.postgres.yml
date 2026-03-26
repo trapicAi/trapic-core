@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=trapic
+      - POSTGRES_USER=trapic
+      - POSTGRES_PASSWORD=${PG_PASSWORD:?Set PG_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trapic -d trapic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  trapic:
+    build: .
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - TRAPIC_USER=${TRAPIC_USER:-local-user}
+      - TRAPIC_DB_ADAPTER=postgres
+      - TRAPIC_PG_HOST=postgres
+      - TRAPIC_PG_PORT=5432
+      - TRAPIC_PG_USER=trapic
+      - TRAPIC_PG_PASSWORD=${PG_PASSWORD:?Set PG_PASSWORD in .env}
+      - TRAPIC_PG_DATABASE=trapic
+
+volumes:
+  postgres_data:

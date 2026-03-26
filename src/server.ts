@@ -13,6 +13,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { SqliteDbAdapter } from "./core/adapters/sqlite-db.js";
 import { MariaDbAdapter } from "./core/adapters/mariadb-db.js";
+import { PostgresDbAdapter } from "./core/adapters/postgres-db.js";
 import { DbAdapter } from "./core/db-adapter.js";
 import { warnIfNoopHooks } from "./core/hooks.js";
 import { registerCreate } from "./tools/create.js";
@@ -29,7 +30,7 @@ import { createServer as createHttpServer, IncomingMessage } from "http";
 // ── Config ───────────────────────────────────────────────────
 const PORT = parseInt(process.env.TRAPIC_PORT || "3000", 10);
 const HOST = process.env.TRAPIC_HOST || "127.0.0.1";
-const DB_ADAPTER = process.env.TRAPIC_DB_ADAPTER || "sqlite"; // "sqlite" | "mariadb"
+const DB_ADAPTER = process.env.TRAPIC_DB_ADAPTER || "sqlite"; // "sqlite" | "mariadb" | "postgres"
 const DB_PATH = process.env.TRAPIC_DB || "./data/trapic.db";
 const DEFAULT_USER = process.env.TRAPIC_USER || "local-user";
 const ADMIN_PASSWORD = process.env.TRAPIC_ADMIN_PASSWORD || "";
@@ -40,6 +41,13 @@ const MARIADB_PORT = parseInt(process.env.TRAPIC_MARIADB_PORT || "3306", 10);
 const MARIADB_USER = process.env.TRAPIC_MARIADB_USER || "trapic";
 const MARIADB_PASSWORD = process.env.TRAPIC_MARIADB_PASSWORD || "";
 const MARIADB_DATABASE = process.env.TRAPIC_MARIADB_DATABASE || "trapic";
+
+// PostgreSQL config (used when TRAPIC_DB_ADAPTER=postgres)
+const PG_HOST = process.env.TRAPIC_PG_HOST || "localhost";
+const PG_PORT = parseInt(process.env.TRAPIC_PG_PORT || "5432", 10);
+const PG_USER = process.env.TRAPIC_PG_USER || "trapic";
+const PG_PASSWORD = process.env.TRAPIC_PG_PASSWORD || "";
+const PG_DATABASE = process.env.TRAPIC_PG_DATABASE || "trapic";
 
 // ── Database ─────────────────────────────────────────────────
 import { mkdirSync } from "fs";
@@ -57,6 +65,18 @@ async function initDb(): Promise<DbAdapter> {
       database: MARIADB_DATABASE,
     });
     console.log(`[trapic] MariaDB: ${MARIADB_USER}@${MARIADB_HOST}:${MARIADB_PORT}/${MARIADB_DATABASE}`);
+    return adapter;
+  }
+
+  if (DB_ADAPTER === "postgres") {
+    const adapter = await PostgresDbAdapter.create({
+      host: PG_HOST,
+      port: PG_PORT,
+      user: PG_USER,
+      password: PG_PASSWORD,
+      database: PG_DATABASE,
+    });
+    console.log(`[trapic] PostgreSQL: ${PG_USER}@${PG_HOST}:${PG_PORT}/${PG_DATABASE}`);
     return adapter;
   }
 
@@ -92,13 +112,31 @@ function extractBearer(authHeader: string | null): string | null {
   return match ? match[1] : null;
 }
 
+import { timingSafeEqual } from "crypto";
+
 function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Compare bufA with itself to consume same time
+    timingSafeEqual(bufA, bufA);
+    return false;
   }
-  return result === 0;
+  return timingSafeEqual(bufA, bufB);
+}
+
+// ── Admin rate limiter ────────────────────────────────────────
+const adminAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function isAdminRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const entry = adminAttempts.get(ip);
+  if (!entry || now > entry.resetAt) {
+    adminAttempts.set(ip, { count: 1, resetAt: now + 60_000 });
+    return false;
+  }
+  entry.count++;
+  return entry.count > 10; // max 10 attempts per minute
 }
 
 async function readBody(req: IncomingMessage, maxSize: number = 1024 * 1024): Promise<Buffer | null> {
@@ -197,6 +235,11 @@ const httpServer = createHttpServer(async (req, res) => {
   if (url.pathname.startsWith("/admin/api/")) {
     if (!ADMIN_PASSWORD) {
       json(403, { error: "Admin API disabled. Set TRAPIC_ADMIN_PASSWORD to enable." });
+      return;
+    }
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+    if (isAdminRateLimited(clientIp)) {
+      json(429, { error: "Too many requests. Try again later." });
       return;
     }
     if (!authenticateAdmin(req.headers.authorization || null)) {
@@ -384,6 +427,21 @@ async function main() {
     }
   });
 }
+
+// ── Graceful shutdown ──────────────────────────────────────
+function shutdown(signal: string) {
+  console.log(`[trapic] ${signal} received, shutting down...`);
+  httpServer.close(async () => {
+    if (db && typeof db.close === "function") {
+      await db.close();
+    }
+    process.exit(0);
+  });
+  // Force exit after 10s
+  setTimeout(() => process.exit(1), 10_000);
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 main().catch((err) => {
   console.error("[trapic] Failed to start:", err);

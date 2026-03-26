@@ -22,7 +22,11 @@ import {
   TeamMember,
 } from "../db-adapter.js";
 import { splitTags } from "../tag-utils.js";
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID, randomBytes, createHash } from "crypto";
+
+function hashApiKey(key: string): string {
+  return createHash("sha256").update(key).digest("hex");
+}
 
 const HALF_LIVES: Record<string, number> = {
   state: 30,
@@ -63,6 +67,15 @@ export class SqliteDbAdapter implements DbAdapter {
         last_accessed_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        api_key_hash TEXT NOT NULL UNIQUE,
+        api_key_prefix TEXT NOT NULL DEFAULT '',
+        role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
       CREATE TABLE IF NOT EXISTS teams (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -81,14 +94,6 @@ export class SqliteDbAdapter implements DbAdapter {
       CREATE INDEX IF NOT EXISTS idx_traces_status ON traces(status);
       CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at);
       CREATE INDEX IF NOT EXISTS idx_traces_type ON traces(type);
-
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        api_key TEXT NOT NULL UNIQUE,
-        role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
-        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-      );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS traces_fts USING fts5(
         content, context, content=traces, content_rowid=rowid
@@ -134,11 +139,11 @@ export class SqliteDbAdapter implements DbAdapter {
   async insertTrace(trace: TraceInsert): Promise<{ id: string } | null> {
     const id = randomUUID();
     const stmt = this.db.prepare(`
-      INSERT INTO traces (id, content, context, author, tags, confidence)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO traces (id, content, context, type, author, tags, confidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(id, trace.content, trace.context ?? null, trace.author,
-      JSON.stringify(trace.tags), trace.confidence);
+    stmt.run(id, trace.content, trace.context ?? null, trace.type ?? "decision",
+      trace.author, JSON.stringify(trace.tags), trace.confidence);
     return { id };
   }
 
@@ -432,11 +437,11 @@ export class SqliteDbAdapter implements DbAdapter {
     return "sk-" + randomBytes(32).toString("hex");
   }
 
-  private toUser(row: Record<string, unknown>): User {
+  private toUser(row: Record<string, unknown>, plaintextKey?: string): User {
     return {
       id: row.id as string,
       name: row.name as string,
-      api_key: row.api_key as string,
+      api_key: plaintextKey ?? `${row.api_key_prefix as string}${"*".repeat(16)}`,
       role: row.role as string,
       created_at: row.created_at as string,
     };
@@ -448,16 +453,19 @@ export class SqliteDbAdapter implements DbAdapter {
   }
 
   async getUserByApiKey(apiKey: string): Promise<User | null> {
-    const row = this.db.prepare("SELECT * FROM users WHERE api_key = ?").get(apiKey) as Record<string, unknown> | undefined;
+    const hash = hashApiKey(apiKey);
+    const row = this.db.prepare("SELECT * FROM users WHERE api_key_hash = ?").get(hash) as Record<string, unknown> | undefined;
     return row ? this.toUser(row) : null;
   }
 
   async insertUser(name: string, role: string): Promise<User> {
     const id = randomUUID();
     const apiKey = SqliteDbAdapter.generateApiKey();
-    this.db.prepare("INSERT INTO users (id, name, api_key, role) VALUES (?, ?, ?, ?)").run(id, name, apiKey, role);
+    const hash = hashApiKey(apiKey);
+    const prefix = apiKey.slice(0, 7); // "sk-xxxx"
+    this.db.prepare("INSERT INTO users (id, name, api_key_hash, api_key_prefix, role) VALUES (?, ?, ?, ?, ?)").run(id, name, hash, prefix, role);
     const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Record<string, unknown>;
-    return this.toUser(row);
+    return this.toUser(row, apiKey);
   }
 
   async deleteUser(id: string): Promise<boolean> {
@@ -467,10 +475,12 @@ export class SqliteDbAdapter implements DbAdapter {
 
   async regenerateApiKey(id: string): Promise<User | null> {
     const apiKey = SqliteDbAdapter.generateApiKey();
-    const result = this.db.prepare("UPDATE users SET api_key = ? WHERE id = ?").run(apiKey, id);
+    const hash = hashApiKey(apiKey);
+    const prefix = apiKey.slice(0, 7);
+    const result = this.db.prepare("UPDATE users SET api_key_hash = ?, api_key_prefix = ? WHERE id = ?").run(hash, prefix, id);
     if (result.changes === 0) return null;
     const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Record<string, unknown>;
-    return this.toUser(row);
+    return this.toUser(row, apiKey);
   }
 
   async userCount(): Promise<number> {
