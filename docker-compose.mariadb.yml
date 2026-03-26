@@ -1,0 +1,36 @@
+services:
+  mariadb:
+    image: mariadb:11
+    ports:
+      - "3306:3306"
+    environment:
+      - MARIADB_ROOT_PASSWORD=rootpass
+      - MARIADB_DATABASE=trapic
+      - MARIADB_USER=trapic
+      - MARIADB_PASSWORD=trapicpass
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  trapic:
+    build: .
+    ports:
+      - "3000:3000"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      - TRAPIC_USER=${TRAPIC_USER:-local-user}
+      - TRAPIC_DB_ADAPTER=mariadb
+      - TRAPIC_MARIADB_HOST=mariadb
+      - TRAPIC_MARIADB_PORT=3306
+      - TRAPIC_MARIADB_USER=trapic
+      - TRAPIC_MARIADB_PASSWORD=trapicpass
+      - TRAPIC_MARIADB_DATABASE=trapic
+
+volumes:
+  mariadb_data:

@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trapic-core
+  namespace: trapic
+  labels:
+    app: trapic-core
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: trapic-core
+  template:
+    metadata:
+      labels:
+        app: trapic-core
+    spec:
+      containers:
+        - name: trapic-core
+          image: trapic-core:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: TRAPIC_PORT
+              value: "3000"
+            - name: TRAPIC_HOST
+              value: "0.0.0.0"
+            - name: TRAPIC_DB_ADAPTER
+              value: "mariadb"
+            - name: TRAPIC_MARIADB_HOST
+              value: "mariadb.trapic.svc.cluster.local"
+            - name: TRAPIC_MARIADB_PORT
+              value: "3306"
+            - name: TRAPIC_MARIADB_USER
+              value: "trapic"
+            - name: TRAPIC_MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-secret
+                  key: MARIADB_PASSWORD
+            - name: TRAPIC_MARIADB_DATABASE
+              value: "trapic"
+            - name: TRAPIC_USER
+              value: "local-user"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30

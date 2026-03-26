@@ -83,6 +83,28 @@ export interface ContextCandidate {
   trace_count: number;
 }
 
+export interface User {
+  id: string;
+  name: string;
+  api_key: string;
+  role: string;        // "admin" | "user"
+  created_at: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface TeamMember {
+  id: string;
+  team_id: string;
+  user_id: string;
+  role: string;
+  user_name?: string;
+}
+
 // ── Adapter Interface ────────────────────────────────────────
 
 export interface DbAdapter {
@@ -131,4 +153,32 @@ export interface DbAdapter {
   // ── Context (optional, for recall) ──
   /** Find candidate context clusters */
   findCandidateContexts?(tags: string[], authorIds: string[]): Promise<ContextCandidate[]>;
+
+  // ── Users ──
+  /** List all users */
+  listUsers(): Promise<User[]>;
+  /** Look up a user by API key (for auth) */
+  getUserByApiKey(apiKey: string): Promise<User | null>;
+  /** Create a new user with auto-generated id and api_key */
+  insertUser(name: string, role: string): Promise<User>;
+  /** Delete a user by id */
+  deleteUser(id: string): Promise<boolean>;
+  /** Regenerate api_key for a user */
+  regenerateApiKey(id: string): Promise<User | null>;
+  /** Count total users */
+  userCount(): Promise<number>;
+
+  // ── Teams ──
+  /** List all teams */
+  listTeams(): Promise<Team[]>;
+  /** Create a new team */
+  insertTeam(name: string): Promise<Team>;
+  /** Delete a team and its memberships */
+  deleteTeam(id: string): Promise<boolean>;
+  /** List members of a team (with user names) */
+  listTeamMembers(teamId: string): Promise<TeamMember[]>;
+  /** Add a user to a team */
+  addTeamMember(teamId: string, userId: string, role?: string): Promise<TeamMember>;
+  /** Remove a user from a team */
+  removeTeamMember(teamId: string, userId: string): Promise<boolean>;
 }

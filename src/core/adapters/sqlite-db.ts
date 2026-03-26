@@ -17,9 +17,12 @@ import {
   DecayResult,
   HealthData,
   ContextCandidate,
+  User,
+  Team,
+  TeamMember,
 } from "../db-adapter.js";
 import { splitTags } from "../tag-utils.js";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 
 const HALF_LIVES: Record<string, number> = {
   state: 30,
@@ -60,17 +63,32 @@ export class SqliteDbAdapter implements DbAdapter {
         last_accessed_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS teams (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
       CREATE TABLE IF NOT EXISTS team_members (
         id TEXT PRIMARY KEY,
-        team_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'member'
+        team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        UNIQUE(team_id, user_id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_traces_author ON traces(author);
       CREATE INDEX IF NOT EXISTS idx_traces_status ON traces(status);
       CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at);
       CREATE INDEX IF NOT EXISTS idx_traces_type ON traces(type);
+
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        api_key TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS traces_fts USING fts5(
         content, context, content=traces, content_rowid=rowid
@@ -265,12 +283,16 @@ export class SqliteDbAdapter implements DbAdapter {
   // ── Team access ──
 
   async getVisibleAuthorIds(userId: string): Promise<string[]> {
+    // userId here is the user's name (used as trace author).
+    // Find teammates by looking up the user's id first, then finding shared teams.
     const rows = this.db.prepare(`
-      SELECT DISTINCT tm2.user_id FROM team_members tm1
+      SELECT DISTINCT u2.name FROM users u1
+      JOIN team_members tm1 ON tm1.user_id = u1.id
       JOIN team_members tm2 ON tm1.team_id = tm2.team_id
-      WHERE tm1.user_id = ?
-    `).all(userId) as { user_id: string }[];
-    const ids = rows.map(r => r.user_id);
+      JOIN users u2 ON tm2.user_id = u2.id
+      WHERE u1.name = ?
+    `).all(userId) as { name: string }[];
+    const ids = rows.map(r => r.name);
     if (!ids.includes(userId)) ids.push(userId);
     return ids;
   }
@@ -401,7 +423,107 @@ export class SqliteDbAdapter implements DbAdapter {
   // ── Context (simplified for SQLite) ──
 
   async findCandidateContexts(_scope: string[], _authorIds: string[]): Promise<ContextCandidate[]> {
-    // SQLite version: group by first topic tag as context proxy
     return [];
+  }
+
+  // ── Users ──
+
+  private static generateApiKey(): string {
+    return "sk-" + randomBytes(32).toString("hex");
+  }
+
+  private toUser(row: Record<string, unknown>): User {
+    return {
+      id: row.id as string,
+      name: row.name as string,
+      api_key: row.api_key as string,
+      role: row.role as string,
+      created_at: row.created_at as string,
+    };
+  }
+
+  async listUsers(): Promise<User[]> {
+    const rows = this.db.prepare("SELECT * FROM users ORDER BY created_at DESC").all() as Record<string, unknown>[];
+    return rows.map(r => this.toUser(r));
+  }
+
+  async getUserByApiKey(apiKey: string): Promise<User | null> {
+    const row = this.db.prepare("SELECT * FROM users WHERE api_key = ?").get(apiKey) as Record<string, unknown> | undefined;
+    return row ? this.toUser(row) : null;
+  }
+
+  async insertUser(name: string, role: string): Promise<User> {
+    const id = randomUUID();
+    const apiKey = SqliteDbAdapter.generateApiKey();
+    this.db.prepare("INSERT INTO users (id, name, api_key, role) VALUES (?, ?, ?, ?)").run(id, name, apiKey, role);
+    const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Record<string, unknown>;
+    return this.toUser(row);
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    const result = this.db.prepare("DELETE FROM users WHERE id = ?").run(id);
+    return result.changes > 0;
+  }
+
+  async regenerateApiKey(id: string): Promise<User | null> {
+    const apiKey = SqliteDbAdapter.generateApiKey();
+    const result = this.db.prepare("UPDATE users SET api_key = ? WHERE id = ?").run(apiKey, id);
+    if (result.changes === 0) return null;
+    const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Record<string, unknown>;
+    return this.toUser(row);
+  }
+
+  async userCount(): Promise<number> {
+    const row = this.db.prepare("SELECT COUNT(*) as cnt FROM users").get() as { cnt: number };
+    return row.cnt;
+  }
+
+  // ── Teams ──
+
+  async listTeams(): Promise<Team[]> {
+    const rows = this.db.prepare("SELECT * FROM teams ORDER BY created_at DESC").all() as Record<string, unknown>[];
+    return rows.map(r => ({
+      id: r.id as string,
+      name: r.name as string,
+      created_at: r.created_at as string,
+    }));
+  }
+
+  async insertTeam(name: string): Promise<Team> {
+    const id = randomUUID();
+    this.db.prepare("INSERT INTO teams (id, name) VALUES (?, ?)").run(id, name);
+    const row = this.db.prepare("SELECT * FROM teams WHERE id = ?").get(id) as Record<string, unknown>;
+    return { id: row.id as string, name: row.name as string, created_at: row.created_at as string };
+  }
+
+  async deleteTeam(id: string): Promise<boolean> {
+    const result = this.db.prepare("DELETE FROM teams WHERE id = ?").run(id);
+    return result.changes > 0;
+  }
+
+  async listTeamMembers(teamId: string): Promise<TeamMember[]> {
+    const rows = this.db.prepare(`
+      SELECT tm.id, tm.team_id, tm.user_id, tm.role, u.name as user_name
+      FROM team_members tm LEFT JOIN users u ON tm.user_id = u.id
+      WHERE tm.team_id = ?
+    `).all(teamId) as Record<string, unknown>[];
+    return rows.map(r => ({
+      id: r.id as string,
+      team_id: r.team_id as string,
+      user_id: r.user_id as string,
+      role: r.role as string,
+      user_name: r.user_name as string | undefined,
+    }));
+  }
+
+  async addTeamMember(teamId: string, userId: string, role: string = "member"): Promise<TeamMember> {
+    const id = randomUUID();
+    this.db.prepare("INSERT INTO team_members (id, team_id, user_id, role) VALUES (?, ?, ?, ?)").run(id, teamId, userId, role);
+    return { id, team_id: teamId, user_id: userId, role };
+  }
+
+  async removeTeamMember(teamId: string, userId: string): Promise<boolean> {
+    const result = this.db.prepare("DELETE FROM team_members WHERE team_id = ? AND user_id = ?").run(teamId, userId);
+    return result.changes > 0;
   }
 }

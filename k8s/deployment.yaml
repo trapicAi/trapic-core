@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trapic-core
+  namespace: trapic
+  labels:
+    app: trapic-core
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: trapic-core
+  template:
+    metadata:
+      labels:
+        app: trapic-core
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: trapic-core
+          image: trapic-core:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: TRAPIC_PORT
+              value: "3000"
+            - name: TRAPIC_HOST
+              value: "0.0.0.0"
+            - name: TRAPIC_DB
+              value: "/data/trapic.db"
+            - name: TRAPIC_USER
+              value: "local-user"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: trapic-data
