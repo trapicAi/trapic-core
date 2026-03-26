@@ -28,9 +28,23 @@ npm run build
 npm start
 ```
 
-### Connect your AI tool
+## MCP Server
 
-Add to your `.mcp.json` (Claude Code, Cursor, etc.):
+Trapic Core is a fully compliant [Model Context Protocol](https://modelcontextprotocol.io) server. It uses **Streamable HTTP** transport via `@modelcontextprotocol/sdk`, exposing a single endpoint at `/mcp`.
+
+### Protocol Details
+
+| Property | Value |
+|----------|-------|
+| **Server name** | `trapic-mcp` |
+| **Transport** | Streamable HTTP (`POST /mcp`) |
+| **SDK** | `@modelcontextprotocol/sdk` |
+| **Auth** | Localhost-only by default (no token required) |
+| **Health check** | `GET /health` |
+
+### Connecting MCP Clients
+
+**Claude Code / Cursor / Windsurf** — add to `.mcp.json` in your project root:
 
 ```json
 {
@@ -43,18 +57,121 @@ Add to your `.mcp.json` (Claude Code, Cursor, etc.):
 }
 ```
 
-## MCP Tools
+**Claude Desktop** — add to `claude_desktop_config.json`:
 
-| Tool | Description |
-|------|-------------|
-| `trapic-create` | Create a knowledge trace (decision, convention, fact, state, preference) |
-| `trapic-search` | Search by tags, keywords, type, time range |
-| `trapic-recall` | Session briefing — load project foundations and recent activity |
-| `trapic-update` | Update trace content, status, or supersede old traces |
-| `trapic-get` | Get a trace by ID |
-| `trapic-health` | Project health report — type distribution, decay status |
-| `trapic-decay` | Scan for stale knowledge based on type-specific TTLs |
-| `trapic-import-git` | Import knowledge from git commit history |
+```json
+{
+  "mcpServers": {
+    "trapic": {
+      "url": "http://localhost:3000/mcp"
+    }
+  }
+}
+```
+
+### MCP Tools
+
+Trapic Core registers 9 MCP tools:
+
+#### `trapic-create`
+
+Create a new knowledge trace (decision, convention, fact, state, preference).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `content` | string | Yes | The knowledge content (max 5000 chars) |
+| `context` | string | No | Additional context or reasoning |
+| `tags` | string[] | No | Tags for categorization (e.g. `project:my-app`, `topic:auth`) |
+| `confidence` | `high` \| `medium` \| `low` | No | Confidence level (default: `medium`) |
+
+#### `trapic-search`
+
+Search traces by keywords, tags, type, and time range. Tags with `project:` / `branch:` prefix use AND logic; others use OR logic.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | No | Keyword search (max 500 chars) |
+| `tags` | string[] | No | Filter tags |
+| `status` | `active` \| `superseded` \| `deprecated` | No | Status filter (default: `active`) |
+| `types` | string[] | No | Filter by trace type |
+| `time_days` | number | No | Only return traces from the last N days |
+| `limit` | number | No | Max results (default: 10, max: 50) |
+
+#### `trapic-recall`
+
+Session briefing — load project foundations, team updates, recent activity, and open plans. Call at the start of each session for automatic context loading.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `context` | string | Yes | What you're working on |
+| `project` | string | No | Project name to scope recall |
+| `tags` | string[] | No | Additional filter tags |
+| `max_contexts` | number | No | Max context clusters (default: 5, max: 10) |
+
+#### `trapic-update`
+
+Update an existing trace — change content, status, tags, or mark as superseded.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `trace_id` | UUID | Yes | The trace ID to update |
+| `content` | string | No | New content |
+| `context` | string | No | New context |
+| `status` | `active` \| `superseded` \| `deprecated` | No | New status |
+| `superseded_by` | UUID | No | ID of the trace that supersedes this one |
+| `tags` | string[] | No | New tags |
+| `confidence` | `high` \| `medium` \| `low` | No | New confidence level |
+
+#### `trapic-get`
+
+Get the full content of a single trace by ID. Use after `trapic-search` to read complete details.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `trace_id` | UUID | Yes | The trace ID |
+
+#### `trapic-health`
+
+Knowledge health report — project health score, type distribution, stale/healthy ratio, and activity trends.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project` | string | No | Project name to scope |
+| `tags` | string[] | No | Additional filter tags |
+
+#### `trapic-decay`
+
+Scan for stale/decaying knowledge. Traces decay based on type-specific half-lives (state: 30d, decision: 90d, convention: 180d, preference: 180d, fact: 365d).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project` | string | No | Project name to scope |
+| `tags` | string[] | No | Additional filter tags |
+| `threshold` | number | No | Decay score threshold (default: 0.3) |
+| `dry_run` | boolean | No | Preview only, don't flag traces (default: `true`) |
+
+#### `trapic-review-stale`
+
+Review a stale trace: confirm it's still valid (resets decay) or deprecate it.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `trace_id` | UUID | Yes | The stale trace ID |
+| `action` | `confirm` \| `deprecate` | Yes | Confirm (reset decay) or deprecate |
+| `reason` | string | No | Reason for the action |
+
+#### `trapic-import-git`
+
+Import knowledge from git commit history. Analyzes commits and creates traces to bootstrap a project's knowledge base.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string (URL) | Yes | Git repository URL (HTTP/HTTPS) |
+| `project` | string | Yes | Project name |
+| `branch` | string | No | Branch to import (default: `main`) |
+| `max_commits` | number | No | Max commits to analyze (default: 100, max: 500) |
+| `since` | string | No | Only import commits after this date (YYYY-MM-DD) |
+| `dry_run` | boolean | No | Preview only (default: `true`) |
 
 ## How It Works
 
