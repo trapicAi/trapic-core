@@ -39,7 +39,7 @@ Trapic Core is a fully compliant [Model Context Protocol](https://modelcontextpr
 | **Server name** | `trapic-mcp` |
 | **Transport** | Streamable HTTP (`POST /mcp`) |
 | **SDK** | `@modelcontextprotocol/sdk` |
-| **Auth** | Localhost-only by default (no token required) |
+| **Auth** | Bearer token (optional — enabled via `TRAPIC_API_KEYS`) |
 | **Health check** | `GET /health` |
 
 ### Connecting MCP Clients
@@ -205,7 +205,7 @@ Search uses **structured tags + full-text search** — no vector database, no em
 
 - **Transport**: HTTP with MCP protocol (Streamable HTTP)
 - **Storage**: SQLite (default) or MariaDB — switchable via env var
-- **Auth**: Localhost-only by default — no token needed for self-hosted
+- **Auth**: Bearer token (optional) — open by default, enable with `TRAPIC_API_KEYS`
 - **Deployment**: Docker, Kubernetes, or bare Node.js
 
 ## Database Adapters
@@ -267,6 +267,55 @@ kubectl apply -f k8s/service.yaml
 
 MariaDB mode supports multiple replicas (`replicas: 2` by default). Remember to update the `image` field in the deployment manifests to your container registry (e.g. `ghcr.io/nickjazz/trapic-core:latest`).
 
+## Authentication
+
+By default, Trapic Core runs in **open mode** — no authentication required. This is suitable for localhost-only deployments.
+
+To enable authentication, set the `TRAPIC_API_KEYS` environment variable with one or more comma-separated API keys:
+
+```bash
+# Single key
+export TRAPIC_API_KEYS="sk-my-secret-key-123"
+
+# Multiple keys (e.g. one per team member or client)
+export TRAPIC_API_KEYS="sk-alice-key,sk-bob-key,sk-ci-key"
+```
+
+When API keys are configured, all requests to `/mcp` must include a `Bearer` token:
+
+```
+Authorization: Bearer sk-my-secret-key-123
+```
+
+The `/health` endpoint remains unauthenticated for load balancer health checks.
+
+### MCP Client Configuration with Auth
+
+**Claude Code / Cursor / Windsurf** — add `headers` to `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "trapic": {
+      "type": "http",
+      "url": "http://localhost:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer sk-my-secret-key-123"
+      }
+    }
+  }
+}
+```
+
+### Auth Behavior
+
+| `TRAPIC_API_KEYS` | Behavior |
+|---|---|
+| Not set (default) | Open mode — all requests accepted |
+| Set | Bearer token required — returns `401` if missing, `403` if invalid |
+
+Token validation uses constant-time comparison to prevent timing attacks.
+
 ## Configuration
 
 | Env Variable | Default | Description |
@@ -276,6 +325,7 @@ MariaDB mode supports multiple replicas (`replicas: 2` by default). Remember to 
 | `TRAPIC_DB` | `./data/trapic.db` | SQLite database path |
 | `TRAPIC_USER` | `local-user` | Default user ID |
 | `TRAPIC_DB_ADAPTER` | `sqlite` | Database backend: `sqlite` or `mariadb` |
+| `TRAPIC_API_KEYS` | — | Comma-separated API keys for Bearer auth |
 
 ## Cloud Version
 

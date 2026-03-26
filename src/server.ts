@@ -32,6 +32,7 @@ const HOST = process.env.TRAPIC_HOST || "127.0.0.1";
 const DB_ADAPTER = process.env.TRAPIC_DB_ADAPTER || "sqlite"; // "sqlite" | "mariadb"
 const DB_PATH = process.env.TRAPIC_DB || "./data/trapic.db";
 const DEFAULT_USER = process.env.TRAPIC_USER || "local-user";
+const API_KEYS = (process.env.TRAPIC_API_KEYS || "").split(",").map(k => k.trim()).filter(Boolean);
 
 // MariaDB config (used when TRAPIC_DB_ADAPTER=mariadb)
 const MARIADB_HOST = process.env.TRAPIC_MARIADB_HOST || "localhost";
@@ -84,11 +85,50 @@ function createMcpServer(userId: string): McpServer {
 }
 
 // ── Auth ─────────────────────────────────────────────────────
-// Self-hosted: localhost-only by default, no token required.
-// MCP clients always send a Bearer token — we just use DEFAULT_USER.
-function resolveUser(authHeader: string | null): string {
-  // Could extend: decode JWT, lookup user table, etc.
-  return DEFAULT_USER;
+// When TRAPIC_API_KEYS is set, Bearer token is required.
+// When unset, localhost-only mode — no auth needed.
+
+type AuthResult = {
+  ok: true;
+  userId: string;
+} | {
+  ok: false;
+  status: number;
+  error: string;
+};
+
+function authenticate(authHeader: string | null): AuthResult {
+  // No API keys configured → open mode (localhost use)
+  if (API_KEYS.length === 0) {
+    return { ok: true, userId: DEFAULT_USER };
+  }
+
+  if (!authHeader) {
+    return { ok: false, status: 401, error: "Missing Authorization header. Use: Bearer <api-key>" };
+  }
+
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return { ok: false, status: 401, error: "Invalid Authorization format. Use: Bearer <api-key>" };
+  }
+
+  const token = match[1];
+
+  // Constant-time comparison to prevent timing attacks
+  const valid = API_KEYS.some(key => {
+    if (key.length !== token.length) return false;
+    let result = 0;
+    for (let i = 0; i < key.length; i++) {
+      result |= key.charCodeAt(i) ^ token.charCodeAt(i);
+    }
+    return result === 0;
+  });
+
+  if (!valid) {
+    return { ok: false, status: 403, error: "Invalid API key" };
+  }
+
+  return { ok: true, userId: DEFAULT_USER };
 }
 
 // ── HTTP Server ──────────────────────────────────────────────
@@ -120,8 +160,14 @@ const httpServer = createHttpServer(async (req, res) => {
       return;
     }
 
-    // Resolve user (localhost-only, no auth needed)
-    const userId = resolveUser(req.headers.authorization || null);
+    // Authenticate
+    const auth = authenticate(req.headers.authorization || null);
+    if (!auth.ok) {
+      res.writeHead(auth.status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: auth.error }));
+      return;
+    }
+    const userId = auth.userId;
 
     // Read body (1MB limit)
     const MAX_BODY = 1024 * 1024;
@@ -180,6 +226,11 @@ async function main() {
   httpServer.listen(PORT, HOST, () => {
     console.log(`[trapic] MCP server running at http://${HOST}:${PORT}/mcp`);
     console.log(`[trapic] Health check: http://${HOST}:${PORT}/health`);
+    if (API_KEYS.length > 0) {
+      console.log(`[trapic] Auth: Bearer token required (${API_KEYS.length} API key(s) configured)`);
+    } else {
+      console.log(`[trapic] Auth: open (no TRAPIC_API_KEYS set)`);
+    }
     if (HOST === "127.0.0.1") {
       console.log(`[trapic] Listening on localhost only. Set TRAPIC_HOST=0.0.0.0 to expose.`);
     }
