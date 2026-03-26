@@ -18,6 +18,8 @@ import {
   HealthData,
   ContextCandidate,
   User,
+  Team,
+  TeamMember,
 } from "../db-adapter.js";
 import { splitTags } from "../tag-utils.js";
 import { randomUUID, randomBytes } from "crypto";
@@ -61,11 +63,18 @@ export class SqliteDbAdapter implements DbAdapter {
         last_accessed_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS teams (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+
       CREATE TABLE IF NOT EXISTS team_members (
         id TEXT PRIMARY KEY,
-        team_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'member'
+        team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        UNIQUE(team_id, user_id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_traces_author ON traces(author);
@@ -274,12 +283,16 @@ export class SqliteDbAdapter implements DbAdapter {
   // ── Team access ──
 
   async getVisibleAuthorIds(userId: string): Promise<string[]> {
+    // userId here is the user's name (used as trace author).
+    // Find teammates by looking up the user's id first, then finding shared teams.
     const rows = this.db.prepare(`
-      SELECT DISTINCT tm2.user_id FROM team_members tm1
+      SELECT DISTINCT u2.name FROM users u1
+      JOIN team_members tm1 ON tm1.user_id = u1.id
       JOIN team_members tm2 ON tm1.team_id = tm2.team_id
-      WHERE tm1.user_id = ?
-    `).all(userId) as { user_id: string }[];
-    const ids = rows.map(r => r.user_id);
+      JOIN users u2 ON tm2.user_id = u2.id
+      WHERE u1.name = ?
+    `).all(userId) as { name: string }[];
+    const ids = rows.map(r => r.name);
     if (!ids.includes(userId)) ids.push(userId);
     return ids;
   }
@@ -463,5 +476,54 @@ export class SqliteDbAdapter implements DbAdapter {
   async userCount(): Promise<number> {
     const row = this.db.prepare("SELECT COUNT(*) as cnt FROM users").get() as { cnt: number };
     return row.cnt;
+  }
+
+  // ── Teams ──
+
+  async listTeams(): Promise<Team[]> {
+    const rows = this.db.prepare("SELECT * FROM teams ORDER BY created_at DESC").all() as Record<string, unknown>[];
+    return rows.map(r => ({
+      id: r.id as string,
+      name: r.name as string,
+      created_at: r.created_at as string,
+    }));
+  }
+
+  async insertTeam(name: string): Promise<Team> {
+    const id = randomUUID();
+    this.db.prepare("INSERT INTO teams (id, name) VALUES (?, ?)").run(id, name);
+    const row = this.db.prepare("SELECT * FROM teams WHERE id = ?").get(id) as Record<string, unknown>;
+    return { id: row.id as string, name: row.name as string, created_at: row.created_at as string };
+  }
+
+  async deleteTeam(id: string): Promise<boolean> {
+    const result = this.db.prepare("DELETE FROM teams WHERE id = ?").run(id);
+    return result.changes > 0;
+  }
+
+  async listTeamMembers(teamId: string): Promise<TeamMember[]> {
+    const rows = this.db.prepare(`
+      SELECT tm.id, tm.team_id, tm.user_id, tm.role, u.name as user_name
+      FROM team_members tm LEFT JOIN users u ON tm.user_id = u.id
+      WHERE tm.team_id = ?
+    `).all(teamId) as Record<string, unknown>[];
+    return rows.map(r => ({
+      id: r.id as string,
+      team_id: r.team_id as string,
+      user_id: r.user_id as string,
+      role: r.role as string,
+      user_name: r.user_name as string | undefined,
+    }));
+  }
+
+  async addTeamMember(teamId: string, userId: string, role: string = "member"): Promise<TeamMember> {
+    const id = randomUUID();
+    this.db.prepare("INSERT INTO team_members (id, team_id, user_id, role) VALUES (?, ?, ?, ?)").run(id, teamId, userId, role);
+    return { id, team_id: teamId, user_id: userId, role };
+  }
+
+  async removeTeamMember(teamId: string, userId: string): Promise<boolean> {
+    const result = this.db.prepare("DELETE FROM team_members WHERE team_id = ? AND user_id = ?").run(teamId, userId);
+    return result.changes > 0;
   }
 }

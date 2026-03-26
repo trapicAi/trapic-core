@@ -91,6 +91,20 @@ export interface User {
   created_at: string;
 }
 
+export interface Team {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface TeamMember {
+  id: string;
+  team_id: string;
+  user_id: string;
+  role: string;
+  user_name?: string;
+}
+
 // ── Adapter Interface ────────────────────────────────────────
 
 export interface DbAdapter {
@@ -153,4 +167,18 @@ export interface DbAdapter {
   regenerateApiKey(id: string): Promise<User | null>;
   /** Count total users */
   userCount(): Promise<number>;
+
+  // ── Teams ──
+  /** List all teams */
+  listTeams(): Promise<Team[]>;
+  /** Create a new team */
+  insertTeam(name: string): Promise<Team>;
+  /** Delete a team and its memberships */
+  deleteTeam(id: string): Promise<boolean>;
+  /** List members of a team (with user names) */
+  listTeamMembers(teamId: string): Promise<TeamMember[]>;
+  /** Add a user to a team */
+  addTeamMember(teamId: string, userId: string, role?: string): Promise<TeamMember>;
+  /** Remove a user from a team */
+  removeTeamMember(teamId: string, userId: string): Promise<boolean>;
 }

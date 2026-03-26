@@ -19,4 +19,6 @@ export type {
   HealthData,
   ContextCandidate,
   User,
+  Team,
+  TeamMember,
 } from "./db-adapter.js";

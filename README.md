@@ -298,14 +298,34 @@ TRAPIC_ADMIN_PASSWORD=my-admin-password docker compose up
 
 ### Admin UI Features
 
+**Users tab:**
 - Create and delete users
 - Assign roles (`admin` / `user`)
 - View and copy API keys (masked by default)
 - Regenerate API keys (old key stops working immediately)
 
+**Teams tab:**
+- Create and delete teams
+- Add/remove users from teams
+- Users in the same team can see each other's traces
+
+### Teams
+
+Teams enable knowledge sharing between users. When users belong to the same team, they can search, recall, and view each other's traces.
+
+```
+Team: backend-team
+  ├── alice (can see bob's traces)
+  └── bob   (can see alice's traces)
+```
+
+A user can belong to multiple teams. Visibility is the union of all teammates across all teams.
+
 ### Admin API
 
 The Admin UI is backed by a REST API, protected by the admin password:
+
+**Users:**
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -313,6 +333,17 @@ The Admin UI is backed by a REST API, protected by the admin password:
 | `POST` | `/admin/api/users` | Create user (`{ "name": "alice", "role": "user" }`) |
 | `DELETE` | `/admin/api/users/:id` | Delete a user |
 | `POST` | `/admin/api/users/:id/regenerate` | Regenerate API key |
+
+**Teams:**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/admin/api/teams` | List all teams |
+| `POST` | `/admin/api/teams` | Create team (`{ "name": "backend-team" }`) |
+| `DELETE` | `/admin/api/teams/:id` | Delete team and all memberships |
+| `GET` | `/admin/api/teams/:id/members` | List team members |
+| `POST` | `/admin/api/teams/:id/members` | Add member (`{ "user_id": "..." }`) |
+| `DELETE` | `/admin/api/teams/:id/members/:userId` | Remove member |
 
 All admin API requests require `Authorization: Bearer <TRAPIC_ADMIN_PASSWORD>`.
 

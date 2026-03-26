@@ -21,6 +21,8 @@ import {
   HealthData,
   ContextCandidate,
   User,
+  Team,
+  TeamMember,
 } from "../db-adapter.js";
 import { splitTags } from "../tag-utils.js";
 import { randomUUID, randomBytes } from "crypto";
@@ -103,11 +105,20 @@ export class MariaDbAdapter implements DbAdapter {
     `);
 
     await this.pool.execute(`
+      CREATE TABLE IF NOT EXISTS teams (
+        id VARCHAR(36) NOT NULL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await this.pool.execute(`
       CREATE TABLE IF NOT EXISTS team_members (
         id VARCHAR(36) NOT NULL PRIMARY KEY,
-        team_id VARCHAR(255) NOT NULL,
-        user_id VARCHAR(255) NOT NULL,
-        role VARCHAR(50) NOT NULL DEFAULT 'member'
+        team_id VARCHAR(36) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        role VARCHAR(50) NOT NULL DEFAULT 'member',
+        UNIQUE KEY uq_team_user (team_id, user_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
   }
@@ -286,12 +297,14 @@ export class MariaDbAdapter implements DbAdapter {
 
   async getVisibleAuthorIds(userId: string): Promise<string[]> {
     const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT DISTINCT tm2.user_id FROM team_members tm1
+      `SELECT DISTINCT u2.name FROM users u1
+       JOIN team_members tm1 ON tm1.user_id = u1.id
        JOIN team_members tm2 ON tm1.team_id = tm2.team_id
-       WHERE tm1.user_id = ?`,
+       JOIN users u2 ON tm2.user_id = u2.id
+       WHERE u1.name = ?`,
       [userId]
     );
-    const ids = rows.map(r => r.user_id as string);
+    const ids = rows.map(r => r.name as string);
     if (!ids.includes(userId)) ids.push(userId);
     return ids;
   }
@@ -482,5 +495,53 @@ export class MariaDbAdapter implements DbAdapter {
   async userCount(): Promise<number> {
     const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT COUNT(*) as cnt FROM users");
     return rows[0].cnt as number;
+  }
+
+  // ── Teams ──
+
+  async listTeams(): Promise<Team[]> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM teams ORDER BY created_at DESC");
+    return rows.map(r => ({ id: r.id, name: r.name, created_at: new Date(r.created_at).toISOString() }));
+  }
+
+  async insertTeam(name: string): Promise<Team> {
+    const id = randomUUID();
+    await this.pool.execute("INSERT INTO teams (id, name) VALUES (?, ?)", [id, name]);
+    const [rows] = await this.pool.execute<RowDataPacket[]>("SELECT * FROM teams WHERE id = ?", [id]);
+    return { id: rows[0].id, name: rows[0].name, created_at: new Date(rows[0].created_at).toISOString() };
+  }
+
+  async deleteTeam(id: string): Promise<boolean> {
+    await this.pool.execute("DELETE FROM team_members WHERE team_id = ?", [id]);
+    const [result] = await this.pool.execute<ResultSetHeader>("DELETE FROM teams WHERE id = ?", [id]);
+    return result.affectedRows > 0;
+  }
+
+  async listTeamMembers(teamId: string): Promise<TeamMember[]> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT tm.id, tm.team_id, tm.user_id, tm.role, u.name as user_name
+       FROM team_members tm LEFT JOIN users u ON tm.user_id = u.id
+       WHERE tm.team_id = ?`, [teamId]
+    );
+    return rows.map(r => ({
+      id: r.id, team_id: r.team_id, user_id: r.user_id,
+      role: r.role, user_name: r.user_name ?? undefined,
+    }));
+  }
+
+  async addTeamMember(teamId: string, userId: string, role: string = "member"): Promise<TeamMember> {
+    const id = randomUUID();
+    await this.pool.execute(
+      "INSERT INTO team_members (id, team_id, user_id, role) VALUES (?, ?, ?, ?)",
+      [id, teamId, userId, role]
+    );
+    return { id, team_id: teamId, user_id: userId, role };
+  }
+
+  async removeTeamMember(teamId: string, userId: string): Promise<boolean> {
+    const [result] = await this.pool.execute<ResultSetHeader>(
+      "DELETE FROM team_members WHERE team_id = ? AND user_id = ?", [teamId, userId]
+    );
+    return result.affectedRows > 0;
   }
 }

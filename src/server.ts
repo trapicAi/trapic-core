@@ -243,6 +243,67 @@ const httpServer = createHttpServer(async (req, res) => {
       return;
     }
 
+    // ── Team API ──
+
+    // GET /admin/api/teams
+    if (url.pathname === "/admin/api/teams" && req.method === "GET") {
+      const teams = await db.listTeams();
+      json(200, { teams });
+      return;
+    }
+
+    // POST /admin/api/teams
+    if (url.pathname === "/admin/api/teams" && req.method === "POST") {
+      const body = await readBody(req);
+      if (!body) { json(413, { error: "Payload too large" }); return; }
+      let parsed: { name?: string };
+      try { parsed = JSON.parse(body.toString()); } catch { json(400, { error: "Invalid JSON" }); return; }
+      const name = parsed.name?.trim();
+      if (!name) { json(400, { error: "name is required" }); return; }
+      const team = await db.insertTeam(name);
+      json(201, { team });
+      return;
+    }
+
+    // DELETE /admin/api/teams/:id
+    const deleteTeamMatch = url.pathname.match(/^\/admin\/api\/teams\/([^/]+)$/);
+    if (deleteTeamMatch && req.method === "DELETE") {
+      const ok = await db.deleteTeam(deleteTeamMatch[1]);
+      if (!ok) { json(404, { error: "Team not found" }); return; }
+      json(200, { ok: true });
+      return;
+    }
+
+    // GET /admin/api/teams/:id/members
+    const listMembersMatch = url.pathname.match(/^\/admin\/api\/teams\/([^/]+)\/members$/);
+    if (listMembersMatch && req.method === "GET") {
+      const members = await db.listTeamMembers(listMembersMatch[1]);
+      json(200, { members });
+      return;
+    }
+
+    // POST /admin/api/teams/:id/members
+    const addMemberMatch = url.pathname.match(/^\/admin\/api\/teams\/([^/]+)\/members$/);
+    if (addMemberMatch && req.method === "POST") {
+      const body = await readBody(req);
+      if (!body) { json(413, { error: "Payload too large" }); return; }
+      let parsed: { user_id?: string; role?: string };
+      try { parsed = JSON.parse(body.toString()); } catch { json(400, { error: "Invalid JSON" }); return; }
+      if (!parsed.user_id) { json(400, { error: "user_id is required" }); return; }
+      const member = await db.addTeamMember(addMemberMatch[1], parsed.user_id, parsed.role || "member");
+      json(201, { member });
+      return;
+    }
+
+    // DELETE /admin/api/teams/:teamId/members/:userId
+    const removeMemberMatch = url.pathname.match(/^\/admin\/api\/teams\/([^/]+)\/members\/([^/]+)$/);
+    if (removeMemberMatch && req.method === "DELETE") {
+      const ok = await db.removeTeamMember(removeMemberMatch[1], removeMemberMatch[2]);
+      if (!ok) { json(404, { error: "Member not found" }); return; }
+      json(200, { ok: true });
+      return;
+    }
+
     json(404, { error: "Not found" });
     return;
   }
