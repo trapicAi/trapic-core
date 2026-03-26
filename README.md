@@ -1,6 +1,6 @@
 # Trapic Core
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE) [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue)](https://github.com/nickjazz/trapic-core) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE) [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 
 > Self-hosted long-term memory for AI coding assistants.
 

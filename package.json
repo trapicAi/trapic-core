@@ -1,7 +1,7 @@
 {
   "name": "trapic-core",
-  "version": "1.0.0",
-  "description": "Open-source AI knowledge memory engine — MCP server with SQLite storage",
+  "version": "1.1.0",
+  "description": "Open-source AI knowledge memory engine — MCP server with SQLite, PostgreSQL, or MariaDB",
   "type": "module",
   "scripts": {
     "build": "tsc",
