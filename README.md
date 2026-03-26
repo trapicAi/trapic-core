@@ -8,6 +8,18 @@ Your AI forgets everything between sessions. Trapic Core is an [MCP](https://mod
 
 No vector database. No embeddings. No API costs.
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [How It Works](#how-it-works)
+- [MCP Tools](#mcp-tools)
+- [Database](#database)
+- [Authentication](#authentication)
+- [Deployment](#deployment)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Cloud Version](#cloud-version)
+
 ## Quick Start
 
 ```bash
