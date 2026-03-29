@@ -167,6 +167,7 @@ export function registerImportGit(server: McpServer, userId: string | null, db: 
 
         try {
           execFileSync("git", [
+            "-c", "core.hooksPath=/dev/null",
             "clone", `--depth=${params.max_commits + 10}`,
             "--branch", params.branch,
             "--single-branch", params.url, tmpDir,

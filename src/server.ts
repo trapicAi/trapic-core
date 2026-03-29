@@ -195,12 +195,29 @@ function authenticateAdmin(authHeader: string | null): boolean {
   return constantTimeEqual(token, ADMIN_PASSWORD);
 }
 
+// ── MCP rate limiter ──────────────────────────────────────────
+const mcpAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function isMcpRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const entry = mcpAttempts.get(ip);
+  if (!entry || now > entry.resetAt) {
+    mcpAttempts.set(ip, { count: 1, resetAt: now + 60_000 });
+    return false;
+  }
+  entry.count++;
+  return entry.count > 60; // max 60 requests per minute
+}
+
 // ── HTTP Server ──────────────────────────────────────────────
 const httpServer = createHttpServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://localhost:${PORT}`);
 
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  // Security headers
+  const corsOrigin = process.env.TRAPIC_CORS_ORIGIN || "*";
+  res.setHeader("Access-Control-Allow-Origin", corsOrigin);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id, mcp-protocol-version");
 
@@ -226,7 +243,10 @@ const httpServer = createHttpServer(async (req, res) => {
       json(403, { error: "Admin UI disabled. Set TRAPIC_ADMIN_PASSWORD to enable." });
       return;
     }
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
+    });
     res.end(adminHtml());
     return;
   }
@@ -237,7 +257,9 @@ const httpServer = createHttpServer(async (req, res) => {
       json(403, { error: "Admin API disabled. Set TRAPIC_ADMIN_PASSWORD to enable." });
       return;
     }
-    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+    const clientIp = process.env.TRAPIC_TRUST_PROXY
+      ? (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown"
+      : req.socket.remoteAddress || "unknown";
     if (isAdminRateLimited(clientIp)) {
       json(429, { error: "Too many requests. Try again later." });
       return;
@@ -355,6 +377,14 @@ const httpServer = createHttpServer(async (req, res) => {
   if (url.pathname === "/mcp") {
     if (req.method !== "POST") {
       res.writeHead(405, { Allow: "POST" }).end();
+      return;
+    }
+
+    const mcpClientIp = process.env.TRAPIC_TRUST_PROXY
+      ? (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown"
+      : req.socket.remoteAddress || "unknown";
+    if (isMcpRateLimited(mcpClientIp)) {
+      json(429, { error: "Too many requests. Try again later." });
       return;
     }
 

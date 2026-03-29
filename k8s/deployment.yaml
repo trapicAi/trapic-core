@@ -19,6 +19,8 @@ spec:
     spec:
       securityContext:
         fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
         - name: trapic-core
           image: ghcr.io/nickjazz/trapic-core:latest

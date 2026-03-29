@@ -32,6 +32,8 @@ spec:
       containers:
         - name: mariadb
           image: mariadb:11
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 3306
           env:
