@@ -6,15 +6,60 @@ import { hooks } from "../core/hooks.js";
 
 const BAR = "▇";
 
+function calculateCQS(data: Record<string, unknown>): { score: number; breakdown: Record<string, number> } {
+  const healthPct = (data.health_pct as number) ?? 0;
+  const active = (data.active as number) ?? 0;
+  const deprecated = (data.deprecated as number) ?? 0;
+  const superseded = (data.superseded as number) ?? 0;
+  const total = (data.total as number) ?? 0;
+  const recent7d = (data.recent_7d as number) ?? 0;
+  const byType = (data.by_type as Record<string, number>) ?? {};
+  const typeCount = Object.keys(byType).length;
+
+  // Freshness (30 pts): non-stale ratio
+  const freshness = Math.round(healthPct * 0.3);
+
+  // Diversity (20 pts): type coverage (5 types = full score)
+  const diversity = Math.round(Math.min(typeCount / 5, 1) * 20);
+
+  // Activity (20 pts): at least 2 traces/week = full score
+  const activity = Math.round(Math.min(recent7d / 2, 1) * 20);
+
+  // Depth (15 pts): 50+ active traces = full score
+  const depth = Math.round(Math.min(active / 50, 1) * 15);
+
+  // Hygiene (15 pts): knowledge is being maintained (superseded/deprecated exist)
+  const maintained = deprecated + superseded;
+  const hygiene = total > 0
+    ? Math.round(Math.min(maintained / Math.max(active * 0.1, 1), 1) * 15)
+    : 0;
+
+  const score = freshness + diversity + activity + depth + hygiene;
+  return { score, breakdown: { freshness, diversity, activity, depth, hygiene } };
+}
+
 function renderHealthReport(data: Record<string, unknown>): string {
   const lines: string[] = [];
   const healthPct = data.health_pct as number;
-  const status = healthPct >= 80 ? "HEALTHY" : healthPct >= 50 ? "WARNING" : "CRITICAL";
+  const { score: cqs, breakdown } = calculateCQS(data);
+  const grade = cqs >= 80 ? "A" : cqs >= 60 ? "B" : cqs >= 40 ? "C" : cqs >= 20 ? "D" : "F";
+  const status = cqs >= 80 ? "EXCELLENT" : cqs >= 60 ? "GOOD" : cqs >= 40 ? "FAIR" : cqs >= 20 ? "NEEDS WORK" : "CRITICAL";
 
   lines.push("TRAPIC KNOWLEDGE HEALTH REPORT");
   lines.push("=".repeat(55));
-  lines.push(`Status: ${status} (${healthPct}% healthy)`);
+  lines.push(`Context Quality Score: ${cqs}/100 (${grade} — ${status})`);
   lines.push("");
+
+  lines.push("CQS BREAKDOWN");
+  lines.push("-".repeat(55));
+  const maxPts: Record<string, number> = { freshness: 30, diversity: 20, activity: 20, depth: 15, hygiene: 15 };
+  for (const [dim, pts] of Object.entries(breakdown)) {
+    const max = maxPts[dim] ?? 0;
+    const bar = BAR.repeat(Math.round((pts / Math.max(max, 1)) * 20));
+    lines.push(`  ${dim.padEnd(12)} ${bar.padEnd(20)} ${pts}/${max}`);
+  }
+  lines.push("");
+
   lines.push("OVERVIEW");
   lines.push("-".repeat(55));
   lines.push(`  Active:      ${data.active}  (healthy: ${data.healthy}, stale: ${data.flagged_stale})`);
