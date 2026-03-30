@@ -42,6 +42,7 @@ export function registerRecall(server: McpServer, userId: string | null, db: DbA
         "Filter tags e.g. ['project:myapp', 'branch:main']. 過濾標籤"
       ),
       max_contexts: z.number().int().min(0).max(10).default(5).describe("Maximum active contexts/topics to return (0-10)."),
+      plugin_version: z.string().optional().describe("Trapic plugin version (auto-detected). Used for update notifications."),
     },
     async (params) => {
       try {
@@ -211,7 +212,18 @@ export function registerRecall(server: McpServer, userId: string | null, db: DbA
           asymmetryWarning, hasTeam: teamAuthors.length > 0,
         });
 
-        return { content: [{ type: "text" as const, text: output }] };
+        // Plugin version check
+        const LATEST_PLUGIN_VERSION = "0.7.0";
+        let versionNotice = "";
+        if (params.plugin_version && params.plugin_version !== LATEST_PLUGIN_VERSION) {
+          const [curMajor, curMinor] = params.plugin_version.split(".").map(Number);
+          const [latMajor, latMinor] = LATEST_PLUGIN_VERSION.split(".").map(Number);
+          if (latMajor > curMajor || (latMajor === curMajor && latMinor > curMinor)) {
+            versionNotice = `\n\n> **Plugin update available:** v${params.plugin_version} → v${LATEST_PLUGIN_VERSION}. Run: \`claude plugin update trapic\``;
+          }
+        }
+
+        return { content: [{ type: "text" as const, text: output + versionNotice }] };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: [{ type: "text" as const, text: `Error: ${message}` }] };
