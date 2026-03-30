@@ -142,6 +142,7 @@ interface BriefingTrace {
   tags: string[];
   confidence: string;
   author: string;
+  author_name?: string;
   created_at: string;
 }
 
@@ -231,8 +232,10 @@ export function renderRecallBriefing(data: {
       lines.push(`TEAM UPDATES (${windowLabel(data.teamWindow)}, ${data.teamUpdates.length} traces)`);
       lines.push("-".repeat(55));
       for (const t of data.teamUpdates) {
+        const by = t.author_name || t.author.slice(0, 8);
         lines.push(`[${t.type}] ${t.content}  ${relativeTime(t.created_at)}`);
         if (t.context) lines.push(`  ${t.context}`);
+        lines.push(`  by: ${by}`);
       }
       lines.push("");
     } else {

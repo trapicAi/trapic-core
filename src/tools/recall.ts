@@ -14,13 +14,15 @@ type TraceRow = {
   type: string;
   confidence: string;
   author: string;
+  author_name?: string;
   created_at: string;
 };
 
 function toTraceRow(t: Trace): TraceRow {
   return {
     id: t.id, content: t.content, context: t.context, tags: t.tags,
-    type: t.type, confidence: t.confidence, author: t.author, created_at: t.created_at,
+    type: t.type, confidence: t.confidence, author: t.author,
+    author_name: t.author_name, created_at: t.created_at,
   };
 }
 
