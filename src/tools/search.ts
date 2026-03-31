@@ -55,15 +55,14 @@ export function registerSearch(server: McpServer, userId: string | null, db: DbA
         if (userId) hooks.audit(userId, "trace.search", "trace", undefined, { query: params.query, results: traces.length });
 
         const lines: string[] = [];
-        lines.push(`SEARCH RESULTS (${traces.length}${params.query ? `, query: "${params.query}"` : ""})`);
-        lines.push("-------------------------------------------------------");
+        lines.push(`# Search Results (${traces.length}${params.query ? `, query: "${params.query}"` : ""})`);
         for (const t of traces) {
           const topicTags = t.tags?.filter(tag => tag.startsWith("topic:")).join(", ") || "";
           const age = t.created_at ? formatAge(t.created_at) : "";
-          lines.push(`[${t.type}] ${trunc(t.content, 200)}`);
-          if (t.context) lines.push(`  why: ${trunc(t.context, 150)}`);
           const authorLabel = t.author_name || t.author.slice(0, 8);
-          lines.push(`  ${topicTags} | ${age} | by: ${authorLabel}  id: ${t.id}`);
+          lines.push(`- **[${t.type}]** ${trunc(t.content, 200)}`);
+          if (t.context) lines.push(`  ${trunc(t.context, 150)}`);
+          lines.push(`  ${topicTags} | ${age} | by: ${authorLabel} | id: ${t.id}`);
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] };

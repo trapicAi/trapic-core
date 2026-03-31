@@ -48,13 +48,12 @@ export function registerDecay(server: McpServer, userId: string | null, db: DbAd
         });
 
         const lines: string[] = [];
-        lines.push(`DECAY SCAN (${params.dry_run ? "dry_run" : "applied"}, threshold: ${params.threshold})`);
+        lines.push(`# Decay Scan (${params.dry_run ? "dry_run" : "applied"}, threshold: ${params.threshold})`);
         lines.push(`Half-lives: state=${HALF_LIVES.state}d decision=${HALF_LIVES.decision}d convention=${HALF_LIVES.convention}d fact=${HALF_LIVES.fact}d`);
         lines.push(`Stale traces: ${filtered.length}`);
-        lines.push("-------------------------------------------------------");
         for (const t of filtered) {
-          lines.push(`[${t.type}] ${t.content}`);
-          lines.push(`  age: ${t.age_days}d | decay: ${t.decay_score} | half-life: ${t.half_life_days}d  id: ${t.id}`);
+          lines.push(`- **[${t.type}]** ${t.content}`);
+          lines.push(`  age: ${t.age_days}d | decay: ${t.decay_score} | half-life: ${t.half_life_days}d | id: ${t.id}`);
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] };
