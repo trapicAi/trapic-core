@@ -136,6 +136,7 @@ export function renderMembers(
 }
 
 interface BriefingTrace {
+  id?: string;
   content: string;
   context: string | null;
   type: string;
@@ -186,12 +187,13 @@ function renderTrace(t: BriefingTrace, showAuthor = false): string {
   const tags = formatTags(t.tags);
   let line = `[${t.type}] ${t.content}`;
   if (t.context) line += `\n  ${t.context}`;
+  const idLabel = t.id ? ` id: ${t.id}` : "";
   const meta = [tags, `${t.confidence}`, age].filter(Boolean).join(" | ");
   if (showAuthor) {
     const by = t.author_name || t.author.slice(0, 8);
-    line += `\n  ${meta} | by: ${by}`;
+    line += `\n  ${meta} | by: ${by}${idLabel}`;
   } else if (meta) {
-    line += `\n  ${meta}`;
+    line += `\n  ${meta}${idLabel}`;
   }
   return line;
 }

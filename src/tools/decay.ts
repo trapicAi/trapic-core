@@ -54,7 +54,7 @@ export function registerDecay(server: McpServer, userId: string | null, db: DbAd
         lines.push("-------------------------------------------------------");
         for (const t of filtered) {
           lines.push(`[${t.type}] ${t.content}`);
-          lines.push(`  age: ${t.age_days}d | decay: ${t.decay_score} | half-life: ${t.half_life_days}d  id: ${t.id.slice(0, 8)}`);
+          lines.push(`  age: ${t.age_days}d | decay: ${t.decay_score} | half-life: ${t.half_life_days}d  id: ${t.id}`);
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] };

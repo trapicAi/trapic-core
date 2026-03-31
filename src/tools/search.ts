@@ -63,7 +63,7 @@ export function registerSearch(server: McpServer, userId: string | null, db: DbA
           lines.push(`[${t.type}] ${trunc(t.content, 200)}`);
           if (t.context) lines.push(`  why: ${trunc(t.context, 150)}`);
           const authorLabel = t.author_name || t.author.slice(0, 8);
-          lines.push(`  ${topicTags} | ${age} | by: ${authorLabel}  id: ${t.id.slice(0, 8)}`);
+          lines.push(`  ${topicTags} | ${age} | by: ${authorLabel}  id: ${t.id}`);
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] };
