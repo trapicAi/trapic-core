@@ -152,14 +152,17 @@ export class SqliteDbAdapter implements DbAdapter {
     return { id };
   }
 
-  async getTraceFull(traceId: string, authorIds: string[]): Promise<Trace | null> {
+  async getTraceFull(traceId: string, authorIds: string[], callerId?: string | null): Promise<Trace | null> {
     const placeholders = authorIds.map(() => "?").join(",");
     const row = this.db.prepare(`
       SELECT t.*, u.name AS author_name FROM traces t
       LEFT JOIN users u ON u.id = t.author
       WHERE t.id = ? AND t.author IN (${placeholders})
     `).get(traceId, ...authorIds) as Record<string, unknown> | undefined;
-    return row ? this.toTrace(row) : null;
+    if (!row) return null;
+    const trace = this.toTrace(row);
+    if (trace.tags.some(t => t.startsWith("private:")) && trace.author !== callerId) return null;
+    return trace;
   }
 
   async updateTrace(traceId: string, authorId: string, update: TraceUpdate): Promise<Trace | null> {
@@ -183,7 +186,7 @@ export class SqliteDbAdapter implements DbAdapter {
     values.push(traceId, authorId);
     this.db.prepare(`UPDATE traces SET ${sets.join(", ")} WHERE id = ? AND author = ?`).run(...values);
 
-    return this.getTraceFull(traceId, [authorId]);
+    return this.getTraceFull(traceId, [authorId], authorId);
   }
 
   async filterTraces(params: FilterParams): Promise<Trace[]> {
@@ -317,6 +320,7 @@ export class SqliteDbAdapter implements DbAdapter {
     flag_threshold: number;
     dry_run: boolean;
     scope?: string[];
+    caller_id?: string | null;
   }): Promise<DecayResult[]> {
     const ph = params.author_ids.map(() => "?").join(",");
     const rows = this.db.prepare(`
@@ -333,6 +337,8 @@ export class SqliteDbAdapter implements DbAdapter {
       if (params.scope && params.scope.length > 0) {
         if (!params.scope.every(s => trace.tags.includes(s))) continue;
       }
+      // Private tag filter
+      if (trace.tags.some(t => t.startsWith("private:")) && trace.author !== params.caller_id) continue;
 
       const halfLife = HALF_LIVES[trace.type] ?? 90;
       const ageDays = (now - new Date(trace.created_at).getTime()) / 86400000;
@@ -367,12 +373,15 @@ export class SqliteDbAdapter implements DbAdapter {
     return results;
   }
 
-  async getTraceForReview(traceId: string, authorIds: string[]): Promise<{ id: string; author: string; content: string } | null> {
+  async getTraceForReview(traceId: string, authorIds: string[], callerId?: string | null): Promise<{ id: string; author: string; content: string } | null> {
     const ph = authorIds.map(() => "?").join(",");
     const row = this.db.prepare(`
-      SELECT id, author, content FROM traces WHERE id = ? AND author IN (${ph})
-    `).get(traceId, ...authorIds) as { id: string; author: string; content: string } | undefined;
-    return row ?? null;
+      SELECT id, author, content, tags FROM traces WHERE id = ? AND author IN (${ph})
+    `).get(traceId, ...authorIds) as { id: string; author: string; content: string; tags: string } | undefined;
+    if (!row) return null;
+    const tags = this.parseTags(row.tags);
+    if (tags.some(t => t.startsWith("private:")) && row.author !== callerId) return null;
+    return { id: row.id, author: row.author, content: row.content };
   }
 
   async confirmStaleTrace(traceId: string, authorIds: string[]): Promise<boolean> {

@@ -121,7 +121,7 @@ export interface DbAdapter {
   insertTrace(trace: TraceInsert): Promise<{ id: string } | null>;
 
   /** Get a single trace by ID with author visibility check */
-  getTraceFull(traceId: string, authorIds: string[]): Promise<Trace | null>;
+  getTraceFull(traceId: string, authorIds: string[], callerId?: string | null): Promise<Trace | null>;
 
   /** Update trace fields. Returns updated trace or null if not found/not authorized */
   updateTrace(traceId: string, authorId: string, update: TraceUpdate): Promise<Trace | null>;
@@ -143,10 +143,11 @@ export interface DbAdapter {
     flag_threshold: number;
     dry_run: boolean;
     scope?: string[];
+    caller_id?: string | null;
   }): Promise<DecayResult[]>;
 
   /** Get trace for stale review (minimal fields) */
-  getTraceForReview(traceId: string, authorIds: string[]): Promise<{ id: string; author: string; content: string } | null>;
+  getTraceForReview(traceId: string, authorIds: string[], callerId?: string | null): Promise<{ id: string; author: string; content: string } | null>;
 
   /** Confirm stale trace (reset decay) */
   confirmStaleTrace(traceId: string, authorIds: string[]): Promise<boolean>;

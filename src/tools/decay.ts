@@ -37,6 +37,7 @@ export function registerDecay(server: McpServer, userId: string | null, db: DbAd
           flag_threshold: params.threshold,
           dry_run: params.dry_run,
           scope: params.project ? [`project:${params.project}`, ...params.tags] : params.tags,
+          caller_id: userId,
         });
 
         const filtered = params.project
@@ -80,7 +81,7 @@ export function registerDecay(server: McpServer, userId: string | null, db: DbAd
         }
 
         const visibleAuthors = await getVisibleAuthors(db, userId);
-        const trace = await db.getTraceForReview(params.trace_id, visibleAuthors);
+        const trace = await db.getTraceForReview(params.trace_id, visibleAuthors, userId);
         if (!trace) {
           return { content: [{ type: "text" as const, text: "Error: Trace not found or not authorized." }] };
         }

@@ -180,14 +180,17 @@ export class PostgresDbAdapter implements DbAdapter {
     return { id };
   }
 
-  async getTraceFull(traceId: string, authorIds: string[]): Promise<Trace | null> {
+  async getTraceFull(traceId: string, authorIds: string[], callerId?: string | null): Promise<Trace | null> {
     if (authorIds.length === 0) return null;
     const placeholders = authorIds.map((_, i) => `$${i + 2}`).join(",");
     const { rows } = await this.pool.query(
       `SELECT t.*, u.name AS author_name FROM traces t LEFT JOIN users u ON u.id = t.author WHERE t.id = $1 AND t.author IN (${placeholders})`,
       [traceId, ...authorIds]
     );
-    return rows.length > 0 ? this.toTrace(rows[0]) : null;
+    if (rows.length === 0) return null;
+    const trace = this.toTrace(rows[0]);
+    if (trace.tags.some(t => t.startsWith("private:")) && trace.author !== callerId) return null;
+    return trace;
   }
 
   async updateTrace(traceId: string, authorId: string, update: TraceUpdate): Promise<Trace | null> {
@@ -215,7 +218,7 @@ export class PostgresDbAdapter implements DbAdapter {
       values
     );
 
-    return this.getTraceFull(traceId, [authorId]);
+    return this.getTraceFull(traceId, [authorId], authorId);
   }
 
   async filterTraces(params: FilterParams): Promise<Trace[]> {
@@ -334,6 +337,7 @@ export class PostgresDbAdapter implements DbAdapter {
     flag_threshold: number;
     dry_run: boolean;
     scope?: string[];
+    caller_id?: string | null;
   }): Promise<DecayResult[]> {
     if (params.author_ids.length === 0) return [];
     const ph = params.author_ids.map((_, i) => `$${i + 1}`).join(",");
@@ -351,6 +355,7 @@ export class PostgresDbAdapter implements DbAdapter {
       if (params.scope && params.scope.length > 0) {
         if (!params.scope.every(s => trace.tags.includes(s))) continue;
       }
+      if (trace.tags.some(t => t.startsWith("private:")) && trace.author !== params.caller_id) continue;
 
       const halfLife = HALF_LIVES[trace.type] ?? 90;
       const ageDays = (now - new Date(trace.created_at).getTime()) / 86400000;
@@ -384,14 +389,17 @@ export class PostgresDbAdapter implements DbAdapter {
     return results;
   }
 
-  async getTraceForReview(traceId: string, authorIds: string[]): Promise<{ id: string; author: string; content: string } | null> {
+  async getTraceForReview(traceId: string, authorIds: string[], callerId?: string | null): Promise<{ id: string; author: string; content: string } | null> {
     if (authorIds.length === 0) return null;
     const ph = authorIds.map((_, i) => `$${i + 2}`).join(",");
     const { rows } = await this.pool.query(
-      `SELECT id, author, content FROM traces WHERE id = $1 AND author IN (${ph})`,
+      `SELECT id, author, content, tags FROM traces WHERE id = $1 AND author IN (${ph})`,
       [traceId, ...authorIds]
     );
-    return rows.length > 0 ? { id: rows[0].id, author: rows[0].author, content: rows[0].content } : null;
+    if (rows.length === 0) return null;
+    const tags = this.parseTags(rows[0].tags);
+    if (tags.some(t => t.startsWith("private:")) && rows[0].author !== callerId) return null;
+    return { id: rows[0].id, author: rows[0].author, content: rows[0].content };
   }
 
   async confirmStaleTrace(traceId: string, authorIds: string[]): Promise<boolean> {
