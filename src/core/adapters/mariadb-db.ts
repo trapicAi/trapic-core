@@ -178,7 +178,7 @@ export class MariaDbAdapter implements DbAdapter {
     return { id };
   }
 
-  async getTraceFull(traceId: string, authorIds: string[]): Promise<Trace | null> {
+  async getTraceFull(traceId: string, authorIds: string[], _callerId?: string): Promise<Trace | null> {
     if (authorIds.length === 0) return null;
     const placeholders = authorIds.map(() => "?").join(",");
     const [rows] = await this.pool.execute<RowDataPacket[]>(
@@ -320,6 +320,17 @@ export class MariaDbAdapter implements DbAdapter {
     const ids = rows.map(r => r.id as string);
     if (!ids.includes(userId)) ids.push(userId);
     return ids;
+  }
+
+  async getUserTeams(userId: string): Promise<{ id: string; name: string; project_tags: string[] }[]> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT t.id, t.name FROM teams t
+       JOIN team_members tm ON tm.team_id = t.id
+       WHERE tm.user_id = ?
+       ORDER BY t.name`,
+      [userId]
+    );
+    return rows.map(r => ({ id: r.id as string, name: r.name as string, project_tags: [] }));
   }
 
   // ── Decay ──

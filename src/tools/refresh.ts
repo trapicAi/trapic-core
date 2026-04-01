@@ -37,6 +37,9 @@ export function registerRefresh(server: McpServer, userId: string | null, db: Db
         "Scope tags e.g. ['project:myapp', 'branch:main']. Same as your recall scope."
       ),
       project: z.string().optional().describe("Project tag shorthand. 專案標籤"),
+      team_id: z.string().uuid().optional().describe(
+        "Team ID from session start. AI should pass the same team_id used in recall."
+      ),
     },
     async (params) => {
       try {
@@ -53,6 +56,13 @@ export function registerRefresh(server: McpServer, userId: string | null, db: Db
         }
 
         const { scope: scopeTags } = splitTags(baseTags);
+
+        // No project context = only show caller's own traces
+        const hasProject = scopeTags.some(s => s.startsWith("project:"));
+        if (!hasProject) {
+          visibleAuthors.length = 0;
+          visibleAuthors.push(userId);
+        }
 
         // Calculate time_days from since timestamp
         const sinceMs = new Date(params.since).getTime();

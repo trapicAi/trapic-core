@@ -35,6 +35,8 @@ export interface TraceInsert {
   tags: string[];           // includes project:*, branch:* alongside topic tags
   confidence: string;
   caused_by?: string[];     // IDs of traces that caused/led to this one
+  visibility?: string;      // 'public' | 'private' | 'team'
+  visible_to_teams?: string[];  // auto-filled by AI after user picks team at session start
 }
 
 export interface TraceUpdate {
@@ -120,8 +122,8 @@ export interface DbAdapter {
   /** Insert a new trace. Returns { id: string } */
   insertTrace(trace: TraceInsert): Promise<{ id: string } | null>;
 
-  /** Get a single trace by ID with author visibility check */
-  getTraceFull(traceId: string, authorIds: string[]): Promise<Trace | null>;
+  /** Get a single trace by ID with author + visibility check */
+  getTraceFull(traceId: string, authorIds: string[], callerId?: string): Promise<Trace | null>;
 
   /** Update trace fields. Returns updated trace or null if not found/not authorized */
   updateTrace(traceId: string, authorId: string, update: TraceUpdate): Promise<Trace | null>;
@@ -135,6 +137,9 @@ export interface DbAdapter {
   // ── Team access ──
   /** Get all visible author IDs (self + team members) */
   getVisibleAuthorIds(userId: string): Promise<string[]>;
+
+  /** Get user's teams (id, name, project_tags) */
+  getUserTeams(userId: string): Promise<{ id: string; name: string; project_tags: string[] }[]>;
 
   // ── Decay ──
   /** Calculate decay scores, return stale traces */

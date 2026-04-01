@@ -42,12 +42,32 @@ export function registerRecall(server: McpServer, userId: string | null, db: DbA
         "Filter tags e.g. ['project:myapp', 'branch:main']. 過濾標籤"
       ),
       max_contexts: z.number().int().min(0).max(10).default(5).describe("Maximum active contexts/topics to return (0-10)."),
+      team_id: z.string().uuid().optional().describe(
+        "Team ID for this session. If omitted, auto-detects: 1 team = auto-select, 2+ teams = returns team list for user to pick. " +
+        "AI should remember the chosen team_id and pass it on subsequent recalls."
+      ),
       plugin_version: z.string().optional().describe("Trapic plugin version (auto-detected). Used for update notifications."),
     },
     async (params) => {
       try {
         if (!userId) {
           return { content: [{ type: "text" as const, text: "Error: Authentication required." }] };
+        }
+
+        // Team resolution
+        const userTeams = await db.getUserTeams(userId);
+        let sessionTeamId = params.team_id ?? null;
+        let teamPrompt = "";
+
+        if (!sessionTeamId && userTeams.length > 1) {
+          // Multiple teams, no team_id provided — ask user
+          const teamLines = userTeams.map((t, i) =>
+            `${i + 1}. **${t.name}** (${t.id}) — projects: ${t.project_tags?.join(", ") || "(none)"}`
+          );
+          teamPrompt = `\n\n> **Team Selection Required**\n> You have ${userTeams.length} teams:\n> ${teamLines.join("\n> ")}\n> Which team should traces be recorded in? Pass the team_id on next recall.\n`;
+        } else if (!sessionTeamId && userTeams.length === 1) {
+          sessionTeamId = userTeams[0].id;
+          teamPrompt = `\n\n> **Team:** ${userTeams[0].name} (auto-selected). Use team_id: ${userTeams[0].id}\n`;
         }
 
         const visibleAuthors = await getVisibleAuthors(db, userId);
@@ -63,6 +83,15 @@ export function registerRecall(server: McpServer, userId: string | null, db: DbA
         const { scope: scopeTags } = splitTags(baseTags);
         const projectTags = scopeTags.filter(s => s.startsWith("project:"));
         const currentBranch = scopeTags.find(s => s.startsWith("branch:")) ?? null;
+
+        // No project context = read-only mode: only show caller's own traces
+        const hasProject = projectTags.length > 0;
+        if (!hasProject) {
+          // Restrict to self only — don't expand team members
+          visibleAuthors.length = 0;
+          visibleAuthors.push(userId);
+          teamAuthors.length = 0;
+        }
 
         /** Cascade query: try each window until we get >= 1 result */
         async function cascadeQuery(opts: {
@@ -223,7 +252,7 @@ export function registerRecall(server: McpServer, userId: string | null, db: DbA
           }
         }
 
-        return { content: [{ type: "text" as const, text: output + versionNotice }] };
+        return { content: [{ type: "text" as const, text: output + teamPrompt + versionNotice }] };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: [{ type: "text" as const, text: `Error: ${message}` }] };

@@ -1,6 +1,9 @@
 /**
  * Team access helper with caching.
  * Wraps DbAdapter.getVisibleAuthorIds() with in-memory TTL cache.
+ *
+ * Note: team membership for visibility checks is now done INSIDE DB RPCs
+ * (ROOT-FIX), not client-side. getCallerTeamIds was removed.
  */
 import { DbAdapter } from "./db-adapter.js";
 

@@ -24,7 +24,7 @@ export function registerGet(server: McpServer, userId: string | null, db: DbAdap
           return { content: [{ type: "text" as const, text: "Error: Authentication required." }] };
         }
 
-        const trace = await db.getTraceFull(params.trace_id, visibleAuthors);
+        const trace = await db.getTraceFull(params.trace_id, visibleAuthors, userId);
         if (!trace) {
           return { content: [{ type: "text" as const, text: "Trace not found or access denied." }] };
         }

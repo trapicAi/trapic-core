@@ -152,7 +152,7 @@ export class SqliteDbAdapter implements DbAdapter {
     return { id };
   }
 
-  async getTraceFull(traceId: string, authorIds: string[]): Promise<Trace | null> {
+  async getTraceFull(traceId: string, authorIds: string[], _callerId?: string): Promise<Trace | null> {
     const placeholders = authorIds.map(() => "?").join(",");
     const row = this.db.prepare(`
       SELECT t.*, u.name AS author_name FROM traces t
@@ -308,6 +308,16 @@ export class SqliteDbAdapter implements DbAdapter {
     const ids = rows.map(r => r.id);
     if (!ids.includes(userId)) ids.push(userId);
     return ids;
+  }
+
+  async getUserTeams(userId: string): Promise<{ id: string; name: string; project_tags: string[] }[]> {
+    const rows = this.db.prepare(`
+      SELECT t.id, t.name FROM teams t
+      JOIN team_members tm ON tm.team_id = t.id
+      WHERE tm.user_id = ?
+      ORDER BY t.name
+    `).all(userId) as { id: string; name: string }[];
+    return rows.map(r => ({ id: r.id, name: r.name, project_tags: [] }));
   }
 
   // ── Decay ──
