@@ -18,7 +18,7 @@ export function jaccard(a: string, b: string): number {
 }
 
 const DEDUP_THRESHOLD = 0.6;
-const DEDUP_SEARCH_DAYS = 30;
+const DEDUP_SEARCH_DAYS = 90;
 const DEDUP_SEARCH_LIMIT = 20;
 
 export function registerCreate(server: McpServer, userId: string | null, db: DbAdapter): void {
