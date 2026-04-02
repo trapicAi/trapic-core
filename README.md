@@ -1,6 +1,6 @@
 # Trapic Core
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue)](https://github.com/nickjazz/trapic-core) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE) [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue)](https://github.com/trapicAi/trapic-core) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE) [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 
 > Self-hosted long-term memory for AI coding assistants.
 
@@ -25,7 +25,7 @@ No vector database. No embeddings. No API costs.
 ## Quick Start
 
 ```bash
-git clone https://github.com/nickjazz/trapic-core.git
+git clone https://github.com/trapicAi/trapic-core.git
 cd trapic-core
 docker compose up
 ```
@@ -285,7 +285,7 @@ All endpoints require `Authorization: Bearer <TRAPIC_ADMIN_PASSWORD>`.
 
 ### Docker
 
-Public image: `ghcr.io/nickjazz/trapic-core:latest`
+Public image: `ghcr.io/trapicAi/trapic-core:latest`
 
 ```bash
 # SQLite (default)
@@ -359,7 +359,7 @@ npm install && npm run build && npm start
 
 Don't want to self-host? [trapic.ai](https://trapic.ai) offers a managed version with OAuth login and team collaboration.
 
-Use the [Trapic Plugin](https://github.com/nickjazz/trapic-plugin) for one-click setup.
+Use the [Trapic Plugin](https://github.com/trapicAi/trapic-plugin) for one-click setup.
 
 ## License
 
