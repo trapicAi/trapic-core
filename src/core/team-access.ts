@@ -6,6 +6,7 @@
  * (ROOT-FIX), not client-side. getCallerTeamIds was removed.
  */
 import { DbAdapter } from "./db-adapter.js";
+import { cacheSet } from "./cache-utils.js";
 
 const cache = new Map<string, { ids: string[]; ts: number }>();
 const CACHE_TTL = 60_000; // 1 minute
@@ -19,10 +20,6 @@ export async function getVisibleAuthors(db: DbAdapter, userId: string): Promise<
   const ids = await db.getVisibleAuthorIds(userId);
   if (!ids.includes(userId)) ids.push(userId);
 
-  if (cache.size >= MAX_CACHE_SIZE) {
-    const firstKey = cache.keys().next().value;
-    if (firstKey !== undefined) cache.delete(firstKey);
-  }
-  cache.set(userId, { ids, ts: now });
+  cacheSet(cache, userId, { ids, ts: now }, MAX_CACHE_SIZE);
   return ids;
 }

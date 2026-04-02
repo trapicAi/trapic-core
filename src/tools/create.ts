@@ -6,7 +6,7 @@ import { hooks } from "../core/hooks.js";
 const VALID_TYPES = ["decision", "fact", "convention", "state", "preference"];
 
 /** Jaccard similarity on word tokens (case-insensitive) */
-function jaccard(a: string, b: string): number {
+export function jaccard(a: string, b: string): number {
   const tokenize = (s: string) => new Set(s.toLowerCase().split(/\W+/).filter(w => w.length > 2));
   const setA = tokenize(a);
   const setB = tokenize(b);
@@ -155,7 +155,7 @@ export function registerCreate(server: McpServer, userId: string | null, db: DbA
           tags: deduped,
           confidence: params.confidence,
           caused_by: params.caused_by.length > 0 ? params.caused_by : undefined,
-          visibility: visibleToTeams ? "team" : params.visibility,
+          visibility: (visibleToTeams && params.visibility !== 'private') ? "team" : params.visibility,
           visible_to_teams: visibleToTeams,
         });
 

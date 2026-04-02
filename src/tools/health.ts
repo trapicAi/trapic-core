@@ -1,19 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { DbAdapter } from "../core/db-adapter.js";
+import { DbAdapter, HealthData } from "../core/db-adapter.js";
 import { getVisibleAuthors } from "../core/team-access.js";
 import { hooks } from "../core/hooks.js";
 
 const BAR = "▇";
 
-function calculateCQS(data: Record<string, unknown>): { score: number; breakdown: Record<string, number> } {
-  const healthPct = (data.health_pct as number) ?? 0;
-  const active = (data.active as number) ?? 0;
-  const deprecated = (data.deprecated as number) ?? 0;
-  const superseded = (data.superseded as number) ?? 0;
-  const total = (data.total as number) ?? 0;
-  const recent7d = (data.recent_7d as number) ?? 0;
-  const byType = (data.by_type as Record<string, number>) ?? {};
+function calculateCQS(data: HealthData): { score: number; breakdown: Record<string, number> } {
+  const healthPct = data.health_pct ?? 0;
+  const active = data.active_traces ?? 0;
+  const total = data.total_traces ?? 0;
+  const recent7d = data.recent_7d ?? 0;
+  const byType = data.by_type ?? {};
   const typeCount = Object.keys(byType).length;
 
   // Freshness (30 pts): non-stale ratio
@@ -28,19 +26,19 @@ function calculateCQS(data: Record<string, unknown>): { score: number; breakdown
   // Depth (15 pts): 50+ active traces = full score
   const depth = Math.round(Math.min(active / 50, 1) * 15);
 
-  // Hygiene (15 pts): knowledge is being maintained (superseded/deprecated exist)
-  const maintained = deprecated + superseded;
+  // Hygiene (15 pts): traces cleaned up (total - active = deprecated/superseded)
+  const cleaned = total - active;
   const hygiene = total > 0
-    ? Math.round(Math.min(maintained / Math.max(active * 0.1, 1), 1) * 15)
+    ? Math.round(Math.min(cleaned / Math.max(active * 0.1, 1), 1) * 15)
     : 0;
 
   const score = freshness + diversity + activity + depth + hygiene;
   return { score, breakdown: { freshness, diversity, activity, depth, hygiene } };
 }
 
-function renderHealthReport(data: Record<string, unknown>): string {
+function renderHealthReport(data: HealthData): string {
   const lines: string[] = [];
-  const healthPct = data.health_pct as number;
+  const healthPct = data.health_pct;
   const { score: cqs, breakdown } = calculateCQS(data);
   const grade = cqs >= 80 ? "A" : cqs >= 60 ? "B" : cqs >= 40 ? "C" : cqs >= 20 ? "D" : "F";
   const status = cqs >= 80 ? "EXCELLENT" : cqs >= 60 ? "GOOD" : cqs >= 40 ? "FAIR" : cqs >= 20 ? "NEEDS WORK" : "CRITICAL";
@@ -49,7 +47,6 @@ function renderHealthReport(data: Record<string, unknown>): string {
   lines.push("=".repeat(55));
   lines.push(`Context Quality Score: ${cqs}/100 (${grade} — ${status})`);
   lines.push("");
-
   lines.push("CQS BREAKDOWN");
   lines.push("-".repeat(55));
   const maxPts: Record<string, number> = { freshness: 30, diversity: 20, activity: 20, depth: 15, hygiene: 15 };
@@ -60,13 +57,11 @@ function renderHealthReport(data: Record<string, unknown>): string {
   }
   lines.push("");
 
+  const healthy = (data.active_traces ?? 0) - (data.stale_traces ?? 0);
   lines.push("OVERVIEW");
   lines.push("-".repeat(55));
-  lines.push(`  Active:      ${data.active}  (healthy: ${data.healthy}, stale: ${data.flagged_stale})`);
-  lines.push(`  Deprecated:  ${data.deprecated}`);
-  lines.push(`  Superseded:  ${data.superseded}`);
-  lines.push(`  Total:       ${data.total}`);
-  lines.push(`  Avg age:     ${data.avg_age_days} days`);
+  lines.push(`  Active:      ${data.active_traces}  (healthy: ${healthy}, stale: ${data.stale_traces})`);
+  lines.push(`  Total:       ${data.total_traces}`);
   lines.push("");
   lines.push("ACTIVITY");
   lines.push("-".repeat(55));
@@ -93,11 +88,10 @@ function renderHealthReport(data: Record<string, unknown>): string {
     lines.push("");
   }
 
-  const active = data.active as number;
+  const active = data.active_traces ?? 0;
   if (active > 0) {
-    const healthy = data.healthy as number;
-    const stale = data.flagged_stale as number;
-    const healthBar = BAR.repeat(Math.round(healthy / active * 30));
+    const stale = data.stale_traces ?? 0;
+    const healthBar = BAR.repeat(Math.round((active - stale) / active * 30));
     const staleBar = "x".repeat(Math.round(stale / active * 30));
     lines.push("HEALTH BAR");
     lines.push("-".repeat(55));
@@ -135,7 +129,7 @@ export function registerHealth(server: McpServer, userId: string | null, db: DbA
         hooks.audit(userId, "trace.search", "trace", undefined, { action: "health_report", tags: filterTags });
 
         return {
-          content: [{ type: "text" as const, text: renderHealthReport(data as unknown as Record<string, unknown>) }],
+          content: [{ type: "text" as const, text: renderHealthReport(data) }],
         };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

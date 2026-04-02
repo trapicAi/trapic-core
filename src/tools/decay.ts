@@ -3,14 +3,7 @@ import { z } from "zod";
 import { DbAdapter } from "../core/db-adapter.js";
 import { getVisibleAuthors } from "../core/team-access.js";
 import { hooks } from "../core/hooks.js";
-
-const HALF_LIVES: Record<string, number> = {
-  state: 30,
-  decision: 90,
-  convention: 180,
-  preference: 180,
-  fact: 365,
-};
+import { HALF_LIVES } from "../core/decay-config.js";
 
 export function registerDecay(server: McpServer, userId: string | null, db: DbAdapter): void {
   server.tool(

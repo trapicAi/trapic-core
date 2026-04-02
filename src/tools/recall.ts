@@ -207,21 +207,11 @@ export function registerRecall(server: McpServer, userId: string | null, db: DbA
           asymmetryWarning = "No recent team traces found. You may be working in isolation.";
         }
 
-        // Stale count
+        // Stale count — use getKnowledgeHealth which already aggregates stale_traces
         let staleCount = 0;
-        {
-          const staleData = await db.filterTraces({
-            tags: projectTags,
-            status: "active",
-            author_ids: visibleAuthors,
-            time_days: null,
-            types: [],
-            limit: 100,
-            query: null,
-            caller_id: userId,
-            exclude_stale: false,
-          });
-          staleCount = staleData.filter(t => t.flagged_for_review === true).length;
+        if (projectTags.length > 0) {
+          const health = await db.getKnowledgeHealth(projectTags, visibleAuthors);
+          staleCount = health?.stale_traces ?? 0;
         }
 
         hooks.audit(userId, "trace.search", "trace", undefined, {
@@ -252,7 +242,7 @@ export function registerRecall(server: McpServer, userId: string | null, db: DbA
           }
         }
 
-        return { content: [{ type: "text" as const, text: output + teamPrompt + versionNotice }] };
+        return { content: [{ type: "text" as const, text: teamPrompt + output + versionNotice }] };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: [{ type: "text" as const, text: `Error: ${message}` }] };

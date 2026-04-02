@@ -22,19 +22,12 @@ import {
   TeamMember,
 } from "../db-adapter.js";
 import { splitTags } from "../tag-utils.js";
+import { HALF_LIVES } from "../decay-config.js";
 import { randomUUID, randomBytes, createHash } from "crypto";
 
 function hashApiKey(key: string): string {
   return createHash("sha256").update(key).digest("hex");
 }
-
-const HALF_LIVES: Record<string, number> = {
-  state: 30,
-  decision: 90,
-  convention: 180,
-  preference: 180,
-  fact: 365,
-};
 
 export class SqliteDbAdapter implements DbAdapter {
   private db: Database.Database;

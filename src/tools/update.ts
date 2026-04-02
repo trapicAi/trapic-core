@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { DbAdapter } from "../core/db-adapter.js";
+import { DbAdapter, TraceUpdate } from "../core/db-adapter.js";
 import { hooks } from "../core/hooks.js";
 
 export function registerUpdate(server: McpServer, userId: string | null, db: DbAdapter): void {
@@ -23,7 +23,7 @@ export function registerUpdate(server: McpServer, userId: string | null, db: DbA
           return { content: [{ type: "text" as const, text: "Error: Authentication required." }] };
         }
 
-        const update: Record<string, unknown> = {};
+        const update: TraceUpdate = {};
         if (params.content !== undefined) update.content = params.content;
         if (params.context !== undefined) update.context = params.context;
         if (params.tags !== undefined) update.tags = params.tags;
